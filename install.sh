@@ -133,16 +133,16 @@ install_oh_my_zsh() {
 }
 
 # Try to set default shell (best effort; don't fail if not allowed)
-set_default_shell_zsh() {
-  if ! have zsh; then return 0; fi
-  if [[ "${SHELL:-}" == "$(command -v zsh)" ]]; then return 0; fi
-
-  # chsh may not exist or may be blocked in containers; treat as best-effort
-  if have chsh; then
-    chsh -s "$(command -v zsh)" || true
-  fi
-  return 0
-}
+# set_default_shell_zsh() {
+#   if ! have zsh; then return 0; fi
+#   if [[ "${SHELL:-}" == "$(command -v zsh)" ]]; then return 0; fi
+#
+#   # chsh may not exist or may be blocked in containers; treat as best-effort
+#   if have chsh; then
+#     chsh -s "$(command -v zsh)" || true
+#   fi
+#   return 0
+# }
 
 # ---------------------------
 # LazyVim bootstrap
@@ -178,7 +178,7 @@ main() {
   run_step "install_neovim" install_neovim_release
   run_step "link_nvim_and_zsh_configs" link_configs
   run_step "install_oh_my_zsh" install_oh_my_zsh
-  run_step "set_default_shell_zsh" set_default_shell_zsh
+  # run_step "set_default_shell_zsh" set_default_shell_zsh
   run_step "lazyvim_sync_plugins" lazyvim_sync
 
   log "All steps complete."
