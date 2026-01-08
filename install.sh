@@ -115,10 +115,45 @@ install_neovim_release() {
 # Dotfiles linking
 # ---------------------------
 link_configs() {
+  # Get the directory where install.sh lives (dotfiles repo root in your layout)
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
   mkdir -p "${HOME}/.config"
-  # assumes dotfiles repo is the current working directory
-  ln -snf "$(pwd)/nvim" "${HOME}/.config/nvim"
-  ln -snf "$(pwd)/zsh/.zshrc" "${HOME}/.zshrc"
+
+  # --- Neovim config ---
+  local target_nvim="${script_dir}/nvim"
+  local dest_nvim="${HOME}/.config/nvim"
+
+  if [[ ! -d "$target_nvim" ]]; then
+    log "WARN  Expected nvim config at: $target_nvim (not found). Skipping nvim link."
+  else
+    # If dest exists and is not a symlink, back it up
+    if [[ -e "$dest_nvim" && ! -L "$dest_nvim" ]]; then
+      local backup="${dest_nvim}.bak.$(date +%Y%m%d%H%M%S)"
+      log "INFO  Backing up existing $dest_nvim -> $backup"
+      mv "$dest_nvim" "$backup"
+    fi
+
+    # If it's a symlink but points somewhere else, replace it
+    if [[ -L "$dest_nvim" ]]; then
+      rm -f "$dest_nvim"
+    fi
+
+    ln -s "$target_nvim" "$dest_nvim"
+    log "INFO  Linked nvim config: $dest_nvim -> $target_nvim"
+  fi
+
+  # --- Zsh rc ---
+  local target_zshrc="${script_dir}/zsh/.zshrc"
+  local dest_zshrc="${HOME}/.zshrc"
+
+  if [[ -f "$target_zshrc" ]]; then
+    ln -snf "$target_zshrc" "$dest_zshrc"
+    log "INFO  Linked zshrc: $dest_zshrc -> $target_zshrc"
+  else
+    log "WARN  Expected zshrc at: $target_zshrc (not found). Skipping zshrc link."
+  fi
 }
 
 # ---------------------------
