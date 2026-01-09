@@ -60,6 +60,20 @@ ensure_fd_shim() {
 }
 
 # ---------------------------
+# Install lazy git
+# ---------------------------
+install_lazygit() {
+  local tmp
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "${tmp:-}"' RETURN
+
+  local LAZYGIT_VERSION=$(curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" | \grep -Po '"tag_name": *"v\K[^"]*')
+  curl -Lo "$tmp/lazygit.tar.gz" "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz"
+  tar -xzf "$tmp/lazygit.tar.gz" -C "$tmp" lazygit
+  sudo install "$tmp/lazygit" -D -t /usr/local/bin/
+}
+
+# ---------------------------
 # Neovim install (pinned release)
 # ---------------------------
 install_neovim_release() {
@@ -210,6 +224,7 @@ main() {
   fi
 
   run_step "install_neovim" install_neovim_release
+  run_step "install_lazygit" install_lazygit
   run_step "link_nvim_and_zsh_configs" link_configs
   run_step "install_oh_my_zsh" install_oh_my_zsh
   # run_step "set_default_shell_zsh" set_default_shell_zsh
