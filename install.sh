@@ -66,7 +66,6 @@ install_neovim_release() {
   local NVIM_VER="0.11.5"
 
   if have nvim; then
-    # Already present; do nothing.
     return 0
   fi
 
@@ -83,7 +82,7 @@ install_neovim_release() {
 
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  trap 'rm -rf "${tmp:-}"' RETURN
 
   curl -fsSL -o "$tmp/nvim.tar.gz" \
     "https://github.com/neovim/neovim/releases/download/v${NVIM_VER}/nvim-${arch}.tar.gz"
