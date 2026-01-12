@@ -43,7 +43,8 @@ install_pkgs_debian() {
     fd-find \
     fzf \
     jq \
-    build-essential
+    build-essential \
+    openssh-client
 }
 
 # Make `fd` available even if distro uses `fdfind`
