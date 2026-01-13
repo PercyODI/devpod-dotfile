@@ -81,6 +81,12 @@ ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=#818181,underline"
 # User configuration
 export SSH_AUTH_SOCK=/ssh-agent
 
+# Claude Code API Key (pass through from environment)
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+
+# Ensure ~/.local/bin is in PATH (for Claude Code and other user binaries)
+export PATH="${HOME}/.local/bin:${PATH}"
+
 # export MANPATH="/usr/local/man:$MANPATH"
 
 # You may need to manually set your language environment

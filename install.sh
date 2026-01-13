@@ -231,6 +231,69 @@ lazyvim_sync() {
 }
 
 # ---------------------------
+# Claude Code install
+# ---------------------------
+install_claude_code() {
+  if have claude; then
+    log "INFO  Claude Code already installed: $(command -v claude)"
+    return 0
+  fi
+
+  log "INFO  Installing Claude Code..."
+  curl -fsSL https://claude.ai/install.sh | bash
+
+  # Ensure ~/.local/bin is in PATH for current session
+  export PATH="${HOME}/.local/bin:${PATH}"
+
+  # Verify installation
+  if ! have claude; then
+    log "WARN  Claude Code installation completed but binary not found in PATH"
+    return 1
+  fi
+
+  log "INFO  Claude Code installed successfully: $(command -v claude)"
+}
+
+configure_claude_code() {
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Create Claude config directory
+  mkdir -p "${HOME}/.claude"
+
+  # Link Claude settings from repo
+  local target_claude="${script_dir}/claude/settings.json"
+  local dest_claude="${HOME}/.claude/settings.json"
+
+  if [[ ! -f "$target_claude" ]]; then
+    log "WARN  Expected Claude settings at: $target_claude (not found). Skipping Claude config."
+    return 0
+  fi
+
+  # Backup existing config if present
+  if [[ -e "$dest_claude" && ! -L "$dest_claude" ]]; then
+    local backup="${dest_claude}.bak.$(date +%Y%m%d%H%M%S)"
+    log "INFO  Backing up existing Claude settings: $dest_claude -> $backup"
+    mv "$dest_claude" "$backup"
+  fi
+
+  # Remove old symlink if it points elsewhere
+  if [[ -L "$dest_claude" ]]; then
+    rm -f "$dest_claude"
+  fi
+
+  # Create symlink
+  ln -s "$target_claude" "$dest_claude"
+  log "INFO  Linked Claude settings: $dest_claude -> $target_claude"
+
+  # Verify Claude Code works (non-interactive test)
+  if have claude; then
+    log "INFO  Verifying Claude Code installation..."
+    claude --version || log "WARN  Claude Code verification returned non-zero exit"
+  fi
+}
+
+# ---------------------------
 # Main
 # ---------------------------
 main() {
@@ -252,6 +315,8 @@ main() {
   run_step "link_nvim_and_zsh_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
   run_step "install_lazygit" install_lazygit
+  run_step "install_claude_code" install_claude_code
+  run_step "configure_claude_code" configure_claude_code
   run_step "lazyvim_sync_plugins" lazyvim_sync
 
   log "All steps complete."

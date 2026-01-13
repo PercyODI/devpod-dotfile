@@ -2,6 +2,32 @@
 
 A Dotfile repo specifically for devpod environments
 
+## SSH Keys
+
+In order to use git via ssh, you must have the SSH Keys added to the keychain on the host. For example:
+
+```
+ssh-add ~/.ssh/github_id_ed25519
+```
+
+## Secrets
+
+Secrets are expected to exist in `~/.secrets` on the host. Secrets will be loaded into the container with a specific env var name.
+
+| Secret | filename | Env Var Name |
+|--------|----------|--------------|
+| Anthropic API Key | anthropic_api_key | ANTHROPIC_API_KEY |
+
+## Environment Variables
+
+### Required
+- `ANTHROPIC_API_KEY` - Your Anthropic API key for Claude Code
+  - Get your key from: https://console.anthropic.com/
+  - Pass via `--remote-env` when launching devcontainer
+
+### Optional
+- `SSH_AUTH_SOCK` - SSH agent socket (configured in aliases)
+
 ## System Requirements
 
 The following is required on the host system. Currently, no automation is set up for this, as it can vary a lot.
@@ -18,20 +44,18 @@ The following is required on the host system. Currently, no automation is set up
 # Starts a dev container instance on the current working directory.
 alias dup="devcontainer up \
     --workspace-folder . \
-    --dotfiles-repository https://github.com/PercyODI/devpod-dotfile/tree/switch-devcontainer-cli \
+    --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
     --mount type=bind,source=${SSH_AUTH_SOCK},target=/ssh-agent \
-    --update-remote-user-uid-default on \
-    --remote-env SSH_AUTH_SOCK=\"/ssh-agent\""
+    --update-remote-user-uid-default on 
 
 # Starts a dev container instance on the current working directory, and
 # removes the old container if it exists
 alias dup-reset="devcontainer up \
     --workspace-folder . \
-    --dotfiles-repository https://github.com/PercyODI/devpod-dotfile/tree/switch-devcontainer-cli \
+    --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
     --mount type=bind,source=${SSH_AUTH_SOCK},target=/ssh-agent \
     --update-remote-user-uid-default on \
     --remove-existing-container \
-    --remote-env SSH_AUTH_SOCK=\"/ssh-agent\""
 
 # Starts a dev container instance using local dotfiles repo
 alias dup-local="devcontainer up \
@@ -43,5 +67,8 @@ alias dup-local="devcontainer up \
     devcontainer exec --workspace-folder . -- bash -lc 'cd /dotfiles && ./install.sh'"
 
 # SSH into the dev container
-alias dgo="devcontainer exec --workspace-folder . zsh"
+alias dgo='devcontainer exec \
+    --workspace-folder . \
+    --remote-env ANTHROPIC_API_KEY="$(cat ~/.secrets/anthropic_api_key)" \
+    zsh'
 ```
