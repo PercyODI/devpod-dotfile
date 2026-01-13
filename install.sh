@@ -168,6 +168,29 @@ link_configs() {
   else
     log "WARN  Expected zshrc at: $target_zshrc (not found). Skipping zshrc link."
   fi
+
+  # --- oh-my-zsh Customization
+  local target_ohmyzsh="${script_dir}/zsh/oh-my-zsh/custom"
+  local dest_ohmyzsh="${HOME}/.oh-my-zsh/custom"
+
+  if [[ ! -d "$target_ohmyzsh" ]]; then
+    log "WARN  Expected oh-my-zsh config at: $target_ohmyzsh (not found). Skipping oh-my-zsh link."
+  else
+    # If dest exists and is not a symlink, back it up
+    if [[ -e "${dest_ohmyzsh}" && ! -L "${dest_ohmyzsh}" ]]; then
+      local backup="${dest_ohmyzsh}.bak.$(date +%Y%m%d%H%M%S)"
+      log "INFO  Backing up existing $dest_ohmyzsh -> $backup"
+      mv "${dest_ohmyzsh}" "$backup"
+    fi
+
+    # If it's a symlink but points somewhere else, replace it
+    if [[ -L "${dest_ohmyzsh}" ]]; then
+      rm -f "${dest_ohmyzsh}"
+    fi
+
+    ln -s "${target_ohmyzsh}" "${dest_ohmyzsh}"
+    log "INFO  Linked oh-my-zsh config: $dest_ohmyzsh -> $target_ohmyzsh"
+  fi
 }
 
 # ---------------------------
@@ -225,10 +248,10 @@ main() {
   fi
 
   run_step "install_neovim" install_neovim_release
-  run_step "install_lazygit" install_lazygit
-  run_step "link_nvim_and_zsh_configs" link_configs
   run_step "install_oh_my_zsh" install_oh_my_zsh
+  run_step "link_nvim_and_zsh_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
+  run_step "install_lazygit" install_lazygit
   run_step "lazyvim_sync_plugins" lazyvim_sync
 
   log "All steps complete."
