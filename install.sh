@@ -258,6 +258,7 @@ configure_claude_code() {
   local script_dir
   script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+  # --- ~/.claude/settings.json ---
   # Create Claude config directory
   mkdir -p "${HOME}/.claude"
 
@@ -285,6 +286,78 @@ configure_claude_code() {
   # Create symlink
   ln -s "$target_claude" "$dest_claude"
   log "INFO  Linked Claude settings: $dest_claude -> $target_claude"
+
+  # --- ~/.claude.json ---
+  # Copy and configure Claude settings from template
+  local template_claude_json="${script_dir}/claude/claude.json.template"
+  local dest_claude_json="${HOME}/.claude.json"
+
+  if [[ ! -f "$template_claude_json" ]]; then
+    log "WARN  Expected .claude.json template at: $template_claude_json (not found). Skipping .claude.json config."
+    return 0
+  fi
+
+  # Backup existing config if present
+  if [[ -e "$dest_claude_json" && ! -L "$dest_claude_json" ]]; then
+    local backup="${dest_claude_json}.bak.$(date +%Y%m%d%H%M%S)"
+    log "INFO  Backing up existing .claude.json settings: $dest_claude_json -> $backup"
+    mv "$dest_claude_json" "$backup"
+  fi
+
+  # Remove old symlink if it points elsewhere
+  if [[ -L "$dest_claude_json" ]]; then
+    rm -f "$dest_claude_json"
+  fi
+
+  # Copy template to destination
+  cp "$template_claude_json" "$dest_claude_json"
+  log "INFO  Copied .claude.json template to: $dest_claude_json"
+
+  # Get API key suffix from environment variable if available
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    local api_key="${ANTHROPIC_API_KEY}"
+
+    if [[ ${#api_key} -ge 20 ]]; then
+      local api_key_suffix="${api_key: -20}"
+
+      # Add API key suffix to approved list using jq
+      local tmp_json
+      tmp_json="$(mktemp)"
+      jq --arg key "$api_key_suffix" '.customApiKeyResponses.approved += [$key]' "$dest_claude_json" > "$tmp_json"
+      mv "$tmp_json" "$dest_claude_json"
+      log "INFO  Added API key suffix to approved list"
+    else
+      log "WARN  ANTHROPIC_API_KEY is too short (less than 20 characters)"
+    fi
+  else
+    log "INFO  ANTHROPIC_API_KEY not set. Skipping API key configuration."
+  fi
+
+  # Determine project path (find actual project, not dotfiles directory)
+  local project_path=""
+  if [[ -d "/workspaces" ]]; then
+    # Find first directory in /workspaces that isn't the dotfiles directory
+    for dir in /workspaces/*/; do
+      dir="${dir%/}"  # Remove trailing slash
+      if [[ "$dir" != "$script_dir" && -d "$dir" ]]; then
+        project_path="$dir"
+        break
+      fi
+    done
+  fi
+
+  # Exit if no project found
+  if [[ -z "$project_path" ]]; then
+    log "WARN  No project directory found in /workspaces (excluding dotfiles). Skipping project configuration."
+    return 0
+  fi
+
+  # Add project entry using jq
+  local tmp_json
+  tmp_json="$(mktemp)"
+  jq --arg path "$project_path" '.projects[$path] = {"allowedTools": [], "mcpContextUris": [], "mcpServers": {}, "enabledMcpjsonServers": [], "disabledMcpjsonServers": [], "hasTrustDialogAccepted": true}' "$dest_claude_json" > "$tmp_json"
+  mv "$tmp_json" "$dest_claude_json"
+  log "INFO  Added project configuration for: $project_path"
 
   # Verify Claude Code works (non-interactive test)
   if have claude; then
