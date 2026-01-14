@@ -43,7 +43,8 @@ install_pkgs_debian() {
     fd-find \
     fzf \
     jq \
-    build-essential
+    build-essential \
+    openssh-client
 }
 
 # Make `fd` available even if distro uses `fdfind`
@@ -167,6 +168,29 @@ link_configs() {
   else
     log "WARN  Expected zshrc at: $target_zshrc (not found). Skipping zshrc link."
   fi
+
+  # --- oh-my-zsh Customization
+  local target_ohmyzsh="${script_dir}/zsh/oh-my-zsh/custom"
+  local dest_ohmyzsh="${HOME}/.oh-my-zsh/custom"
+
+  if [[ ! -d "$target_ohmyzsh" ]]; then
+    log "WARN  Expected oh-my-zsh config at: $target_ohmyzsh (not found). Skipping oh-my-zsh link."
+  else
+    # If dest exists and is not a symlink, back it up
+    if [[ -e "${dest_ohmyzsh}" && ! -L "${dest_ohmyzsh}" ]]; then
+      local backup="${dest_ohmyzsh}.bak.$(date +%Y%m%d%H%M%S)"
+      log "INFO  Backing up existing $dest_ohmyzsh -> $backup"
+      mv "${dest_ohmyzsh}" "$backup"
+    fi
+
+    # If it's a symlink but points somewhere else, replace it
+    if [[ -L "${dest_ohmyzsh}" ]]; then
+      rm -f "${dest_ohmyzsh}"
+    fi
+
+    ln -s "${target_ohmyzsh}" "${dest_ohmyzsh}"
+    log "INFO  Linked oh-my-zsh config: $dest_ohmyzsh -> $target_ohmyzsh"
+  fi
 }
 
 # ---------------------------
@@ -207,6 +231,142 @@ lazyvim_sync() {
 }
 
 # ---------------------------
+# Claude Code install
+# ---------------------------
+install_claude_code() {
+  if have claude; then
+    log "INFO  Claude Code already installed: $(command -v claude)"
+    return 0
+  fi
+
+  log "INFO  Installing Claude Code..."
+  curl -fsSL https://claude.ai/install.sh | bash
+
+  # Ensure ~/.local/bin is in PATH for current session
+  export PATH="${HOME}/.local/bin:${PATH}"
+
+  # Verify installation
+  if ! have claude; then
+    log "WARN  Claude Code installation completed but binary not found in PATH"
+    return 1
+  fi
+
+  log "INFO  Claude Code installed successfully: $(command -v claude)"
+}
+
+configure_claude_code() {
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+  # --- ~/.claude/settings.json ---
+  # Create Claude config directory
+  mkdir -p "${HOME}/.claude"
+
+  # Link Claude settings from repo
+  local target_claude="${script_dir}/claude/settings.json"
+  local dest_claude="${HOME}/.claude/settings.json"
+
+  if [[ ! -f "$target_claude" ]]; then
+    log "WARN  Expected Claude settings at: $target_claude (not found). Skipping Claude config."
+    return 0
+  fi
+
+  # Backup existing config if present
+  if [[ -e "$dest_claude" && ! -L "$dest_claude" ]]; then
+    local backup="${dest_claude}.bak.$(date +%Y%m%d%H%M%S)"
+    log "INFO  Backing up existing Claude settings: $dest_claude -> $backup"
+    mv "$dest_claude" "$backup"
+  fi
+
+  # Remove old symlink if it points elsewhere
+  if [[ -L "$dest_claude" ]]; then
+    rm -f "$dest_claude"
+  fi
+
+  # Create symlink
+  ln -s "$target_claude" "$dest_claude"
+  log "INFO  Linked Claude settings: $dest_claude -> $target_claude"
+
+  # --- ~/.claude.json ---
+  # Copy and configure Claude settings from template
+  local template_claude_json="${script_dir}/claude/claude.json.template"
+  local dest_claude_json="${HOME}/.claude.json"
+
+  if [[ ! -f "$template_claude_json" ]]; then
+    log "WARN  Expected .claude.json template at: $template_claude_json (not found). Skipping .claude.json config."
+    return 0
+  fi
+
+  # Backup existing config if present
+  if [[ -e "$dest_claude_json" && ! -L "$dest_claude_json" ]]; then
+    local backup="${dest_claude_json}.bak.$(date +%Y%m%d%H%M%S)"
+    log "INFO  Backing up existing .claude.json settings: $dest_claude_json -> $backup"
+    mv "$dest_claude_json" "$backup"
+  fi
+
+  # Remove old symlink if it points elsewhere
+  if [[ -L "$dest_claude_json" ]]; then
+    rm -f "$dest_claude_json"
+  fi
+
+  # Copy template to destination
+  cp "$template_claude_json" "$dest_claude_json"
+  log "INFO  Copied .claude.json template to: $dest_claude_json"
+
+  # Get API key suffix from environment variable if available
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    local api_key="${ANTHROPIC_API_KEY}"
+
+    if [[ ${#api_key} -ge 20 ]]; then
+      local api_key_suffix="${api_key: -20}"
+
+      # Add API key suffix to approved list using jq
+      local tmp_json
+      tmp_json="$(mktemp)"
+      jq --arg key "$api_key_suffix" '.customApiKeyResponses.approved += [$key]' "$dest_claude_json" > "$tmp_json"
+      mv "$tmp_json" "$dest_claude_json"
+      log "INFO  Added API key suffix to approved list"
+    else
+      log "WARN  ANTHROPIC_API_KEY is too short (less than 20 characters)"
+    fi
+  else
+    log "INFO  ANTHROPIC_API_KEY not set. Skipping API key configuration."
+  fi
+
+  # Determine project path (find actual project, not dotfiles directory)
+  local project_path=""
+  if [[ -d "/workspaces" ]]; then
+    # Find first directory in /workspaces that isn't the dotfiles directory
+    for dir in /workspaces/*/; do
+      dir="${dir%/}"  # Remove trailing slash
+      if [[ "$dir" != "$script_dir" && -d "$dir" ]]; then
+        project_path="$dir"
+        break
+      fi
+    done
+  fi
+
+  # Exit if no project found
+  if [[ -z "$project_path" ]]; then
+    log "WARN  No project directory found in /workspaces (excluding dotfiles). Skipping project configuration."
+    return 0
+  fi
+
+  # Add project entry using jq
+  local tmp_json
+  tmp_json="$(mktemp)"
+  jq --arg path "$project_path" '.projects[$path] = {"allowedTools": [], "mcpContextUris": [], "mcpServers": {}, "enabledMcpjsonServers": [], "disabledMcpjsonServers": [], "hasTrustDialogAccepted": true}' "$dest_claude_json" > "$tmp_json"
+  mv "$tmp_json" "$dest_claude_json"
+  log "INFO  Added project configuration for: $project_path"
+
+  # Verify Claude Code works (non-interactive test)
+  if have claude; then
+    log "INFO  Verifying Claude Code installation..."
+    claude --version || log "WARN  Claude Code verification returned non-zero exit"
+  fi
+}
+
+# ---------------------------
 # Main
 # ---------------------------
 main() {
@@ -224,10 +384,12 @@ main() {
   fi
 
   run_step "install_neovim" install_neovim_release
-  run_step "install_lazygit" install_lazygit
-  run_step "link_nvim_and_zsh_configs" link_configs
   run_step "install_oh_my_zsh" install_oh_my_zsh
+  run_step "link_nvim_and_zsh_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
+  run_step "install_lazygit" install_lazygit
+  run_step "install_claude_code" install_claude_code
+  run_step "configure_claude_code" configure_claude_code
   run_step "lazyvim_sync_plugins" lazyvim_sync
 
   log "All steps complete."
