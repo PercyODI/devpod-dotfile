@@ -73,5 +73,7 @@ alias dgo='devcontainer exec \
     --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
     --remote-env GIT_AUTHOR_NAME=${GIT_USER_NAME} \
     --remote-env GIT_AUTHOR_EMAIL=${GIT_USER_EMAIL} \
+    --remote-env GIT_COMMITTER_NAME=${GIT_USER_NAME} \
+    --remote-env GIT_COMMITTER_EMAIL=${GIT_USER_EMAIL} \
     zsh'
 ```
