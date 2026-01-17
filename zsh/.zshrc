@@ -73,6 +73,7 @@ ZSH_THEME="agnoster"
 plugins=(
 	git
 	zsh-autosuggestions
+	ssh-agent
 )
 
 source $ZSH/oh-my-zsh.sh
