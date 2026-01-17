@@ -2,7 +2,6 @@
 
 A Dotfile repo specifically for devpod environments
 
-
 ## Host System Requirements
 
 The following is required on the host system. Currently, no automation is set up for this, as it can vary a lot.
@@ -12,7 +11,7 @@ The following is required on the host system. Currently, no automation is set up
 - Docker Desktop
 - [Dev Container Cli](https://github.com/devcontainers/cli)
 - [direnv](https://direnv.net/)
-    - https://www.papermtn.co.uk/secrets-management-managing-environment-variables-with-direnv/
+  - https://www.papermtn.co.uk/secrets-management-managing-environment-variables-with-direnv/
 - Modern terminal (Wezterm, kitty, warp, iterm2, etc)
 
 ### SSH Keys
@@ -27,11 +26,12 @@ ssh-add ~/.ssh/github_id_ed25519
 
 Secrets are expected to exist in `~/.envrc` on the via direnv host. Secrets will be loaded into the container with a specific env var name.
 
-| Secret | Env Var Name |
-|--------|--------------|
-| Anthropic API Key | ANTHROPIC_API_KEY |
-| Git User Name | GIT_USER_NAME |
-| Git User Email | GIT_USER_EMAIL |
+| Secret             | Env Var Name      | Default                 |
+| ------------------ | ----------------- | ----------------------- |
+| Anthropic API Key  | ANTHROPIC_API_KEY |                         |
+| Git User Name      | GIT_USER_NAME     |                         |
+| Git User Email     | GIT_USER_EMAIL    |                         |
+| Local Dotfile Repo | DOTFILES_DIR      | ~/github/devpod-dotfile |
 
 ## Aliases
 
@@ -40,7 +40,7 @@ Secrets are expected to exist in `~/.envrc` on the via direnv host. Secrets will
 alias dup="devcontainer up \
     --workspace-folder . \
     --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
-    --mount type=bind,source=${SSH_AUTH_SOCK},target=/ssh-agent \
+    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh-agent \
     --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
     --update-remote-user-uid-default on"
 
@@ -49,7 +49,7 @@ alias dup="devcontainer up \
 alias dup-reset="devcontainer up \
     --workspace-folder . \
     --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
-    --mount type=bind,source=${SSH_AUTH_SOCK},target=/ssh-agent \
+    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh-agent \
     --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
     --update-remote-user-uid-default on \
     --remove-existing-container"
@@ -59,7 +59,7 @@ alias dup-local="\
     devcontainer up \
         --workspace-folder . \
         --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh-agent \
-        --mount type=bind,source=$HOME/github/devpod-dotfile,target=/dotfiles \
+        --mount type=bind,source=${DOTFILES_DIR:-${HOME}/github/devpod-dotfile},target=/dotfiles \
         --update-remote-user-uid-default on \
         --remove-existing-container &&
     devcontainer exec \

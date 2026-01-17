@@ -366,6 +366,9 @@ configure_claude_code() {
   fi
 }
 
+configure_ssh() {
+  sudo chmod 666 /ssh-agent
+}
 # ---------------------------
 # Main
 # ---------------------------
@@ -391,6 +394,7 @@ main() {
   run_step "install_claude_code" install_claude_code
   run_step "configure_claude_code" configure_claude_code
   run_step "lazyvim_sync_plugins" lazyvim_sync
+  run_step "configure_ssh" configure_ssh
 
   log "All steps complete."
 }
