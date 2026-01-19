@@ -191,6 +191,29 @@ link_configs() {
     ln -s "${target_ohmyzsh}" "${dest_ohmyzsh}"
     log "INFO  Linked oh-my-zsh config: $dest_ohmyzsh -> $target_ohmyzsh"
   fi
+
+  # --- Lazygit config ---
+  local target_lazygit="${script_dir}/lazygit"
+  local dest_lazygit="${HOME}/.config/lazygit"
+
+  if [[ ! -d "$target_lazygit" ]]; then
+    log "WARN  Expected lazygit config at: $target_lazygit (not found). Skipping lazygit link."
+  else
+    # If dest exists and is not a symlink, back it up
+    if [[ -e "$dest_lazygit" && ! -L "$dest_lazygit" ]]; then
+      local backup="${dest_lazygit}.bak.$(date +%Y%m%d%H%M%S)"
+      log "INFO  Backing up existing $dest_lazygit -> $backup"
+      mv "$dest_lazygit" "$backup"
+    fi
+
+    # If it's a symlink but points somewhere else, replace it
+    if [[ -L "$dest_lazygit" ]]; then
+      rm -f "$dest_lazygit"
+    fi
+
+    ln -s "$target_lazygit" "$dest_lazygit"
+    log "INFO  Linked lazygit config: $dest_lazygit -> $target_lazygit"
+  fi
 }
 
 # ---------------------------
@@ -366,6 +389,40 @@ configure_claude_code() {
   fi
 }
 
+configure_ssh() {
+  sudo chmod 666 /ssh-agent
+
+  # Configure SSH known_hosts
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+  local target_known_hosts="${script_dir}/ssh/known_hosts"
+  local dest_ssh_dir="${HOME}/.ssh"
+  local dest_known_hosts="${dest_ssh_dir}/known_hosts"
+
+  # Create .ssh directory if it doesn't exist
+  mkdir -p "$dest_ssh_dir"
+  chmod 700 "$dest_ssh_dir"
+
+  if [[ ! -f "$target_known_hosts" ]]; then
+    log "WARN  Expected SSH known_hosts at: $target_known_hosts (not found). Skipping known_hosts config."
+    return 0
+  fi
+
+  # Backup existing known_hosts if present and not identical
+  if [[ -f "$dest_known_hosts" ]]; then
+    if ! cmp -s "$target_known_hosts" "$dest_known_hosts"; then
+      local backup="${dest_known_hosts}.bak.$(date +%Y%m%d%H%M%S)"
+      log "INFO  Backing up existing known_hosts: $dest_known_hosts -> $backup"
+      cp "$dest_known_hosts" "$backup"
+    fi
+  fi
+
+  # Copy known_hosts file
+  cp "$target_known_hosts" "$dest_known_hosts"
+  chmod 644 "$dest_known_hosts"
+  log "INFO  Copied SSH known_hosts: $dest_known_hosts"
+}
 # ---------------------------
 # Main
 # ---------------------------
@@ -385,12 +442,13 @@ main() {
 
   run_step "install_neovim" install_neovim_release
   run_step "install_oh_my_zsh" install_oh_my_zsh
-  run_step "link_nvim_and_zsh_configs" link_configs
+  run_step "link_nvim_zsh_and_lazygit_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
   run_step "install_lazygit" install_lazygit
   run_step "install_claude_code" install_claude_code
   run_step "configure_claude_code" configure_claude_code
   run_step "lazyvim_sync_plugins" lazyvim_sync
+  run_step "configure_ssh" configure_ssh
 
   log "All steps complete."
 }
