@@ -92,6 +92,8 @@ export PATH="${HOME}/.local/bin:${PATH}"
 
 # You may need to manually set your language environment
 # export LANG=en_US.UTF-8
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 
 # Preferred editor for local and remote sessions
 # if [[ -n $SSH_CONNECTION ]]; then
@@ -112,6 +114,10 @@ export PATH="${HOME}/.local/bin:${PATH}"
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 
+# Tmux development workspace alias
+# Usage: dev [session-name] [directory]
+# Creates a tmux workspace with nvim, Claude, test watcher, and command panels
+alias dev='~/.config/tmux/dev-workspace.sh'
 
 # . /opt/homebrew/opt/asdf/libexec/asdf.sh
 

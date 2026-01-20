@@ -1,0 +1,3 @@
+return {
+  "snacks.nvim",
+}
