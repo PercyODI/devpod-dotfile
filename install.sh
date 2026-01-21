@@ -44,7 +44,8 @@ install_pkgs_debian() {
     fzf \
     jq \
     build-essential \
-    openssh-client
+    openssh-client \
+    tmux
 }
 
 # Make `fd` available even if distro uses `fdfind`
@@ -213,6 +214,29 @@ link_configs() {
 
     ln -s "$target_lazygit" "$dest_lazygit"
     log "INFO  Linked lazygit config: $dest_lazygit -> $target_lazygit"
+  fi
+
+  # --- Tmux config ---
+  local target_tmux="${script_dir}/tmux"
+  local dest_tmux="${HOME}/.config/tmux"
+
+  if [[ ! -d "$target_tmux" ]]; then
+    log "WARN  Expected tmux config at: $target_tmux (not found). Skipping tmux link."
+  else
+    # If dest exists and is not a symlink, back it up
+    if [[ -e "$dest_tmux" && ! -L "$dest_tmux" ]]; then
+      local backup="${dest_tmux}.bak.$(date +%Y%m%d%H%M%S)"
+      log "INFO  Backing up existing $dest_tmux -> $backup"
+      mv "$dest_tmux" "$backup"
+    fi
+
+    # If it's a symlink but points somewhere else, replace it
+    if [[ -L "$dest_tmux" ]]; then
+      rm -f "$dest_tmux"
+    fi
+
+    ln -s "$target_tmux" "$dest_tmux"
+    log "INFO  Linked tmux config: $dest_tmux -> $target_tmux"
   fi
 }
 
@@ -442,7 +466,7 @@ main() {
 
   run_step "install_neovim" install_neovim_release
   run_step "install_oh_my_zsh" install_oh_my_zsh
-  run_step "link_nvim_zsh_and_lazygit_configs" link_configs
+  run_step "link_nvim_zsh_lazygit_and_tmux_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
   run_step "install_lazygit" install_lazygit
   run_step "install_claude_code" install_claude_code

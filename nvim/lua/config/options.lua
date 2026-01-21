@@ -16,3 +16,6 @@ vim.g.clipboard = {
     ["*"] = require("vim.ui.clipboard.osc52").paste("*"),
   },
 }
+
+-- Auto-reload files when changed on disk
+vim.opt.autoread = true
