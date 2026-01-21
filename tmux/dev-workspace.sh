@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dev-workspace.sh - Initialize a tmux development workspace with nvim, Claude, test watcher, and command panels
+# dev-workspace.sh - Initialize a tmux development workspace with nvim, Claude, command panels
 
 set -euo pipefail
 
@@ -18,20 +18,19 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
 fi
 
 # Create new session (pane 0)
-tmux new-session -d -s "$SESSION_NAME" -n "editor" -c "$WORK_DIR"
+tmux new-session -d -x- -y- -s "$SESSION_NAME" -n "editor" -c "$WORK_DIR"
 
-# 1) Create bottom full-width Commands pane (pane 1)
-tmux split-window -v -l 20% -c "$WORK_DIR" -t "$SESSION_NAME:editor.0"
+# 1) Create bottom full-width Commands pane (starts as pane 1, becomes pane 2 after Claude pane is created)
+tmux split-window -v -l 10% -c "$WORK_DIR" -t "$SESSION_NAME:editor.0"
 
 # Ensure we’re operating in the top pane (pane 0) for the remaining splits
 tmux select-pane -t "$SESSION_NAME:editor.0"
 
 # Create the right Claude pane
-tmux split-window -h -l 40% -c "$WORK_DIR" -t "$SESSION_NAME:editor.0"
+tmux split-window -h -l 33% -c "$WORK_DIR" -t "$SESSION_NAME:editor.0"
 
-# 3) Split the right pane vertically into Claude (top ~60%) and Tests (bottom ~40%)
-# Target the right pane (pane 2), split off the bottom 40% -> new pane 3
-# tmux split-window -h -l 40% -c "$WORK_DIR" -t "$SESSION_NAME:editor.2"
+# Force command pane to correct size after all splits are complete
+# tmux resize-pane -t "$SESSION_NAME:editor.2" -y 5%
 
 # Set pane titles (requires pane-border-status for display)
 tmux select-pane -t "$SESSION_NAME:editor.0" -T "Neovim"
