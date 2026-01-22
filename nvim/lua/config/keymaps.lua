@@ -18,6 +18,6 @@ vim.keymap.set("v", "<leader>tc", function()
   osc52.copy("+")(lines)
   -- Restore visual selection
   vim.cmd('normal! gv')
-end, { noremap = true })
+end, { noremap = true, desc = "Copy to tmux/system clipboard" })
 -- Paste from tmux buffer
-vim.keymap.set("n", "<leader>tp", ':let @0 = system("tmux save-buffer -")<cr>"0p<cr>g;', { noremap = true })
+vim.keymap.set("n", "<leader>tp", ':let @0 = system("tmux save-buffer -")<cr>"0p<cr>g;', { noremap = true, desc = "Paste from tmux buffer" })
