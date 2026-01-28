@@ -1,0 +1,24 @@
+{
+  "tips": [
+    {
+      "title": "Jump Around in Files",
+      "description": "Use **<leader>j** prefix for Flash jump commands:\n\n- `<leader>jj` - Flash Jump to any visible text\n- `<leader>jf` - Flash forward to character\n- `<leader>jF` - Flash backward to character\n- `<leader>jt` - Flash forward till character\n- `<leader>jT` - Flash backward till character\n- `<leader>jS` - Flash Treesitter (jump to syntax nodes)"
+    },
+    {
+      "title": "Tmux Clipboard Integration",
+      "description": "Seamlessly copy/paste between Neovim and tmux:\n\n- `<leader>tc` (visual mode) - Copy selection to tmux & system clipboard\n- `<leader>tp` (normal mode) - Paste from tmux buffer\n\nBoth commands use OSC 52 for cross-platform clipboard sync!"
+    },
+    {
+      "title": "Show Hidden Files in Picker",
+      "description": "When using Snacks file picker windows, press **Alt-A** to toggle hidden files visibility.\n\nThis is useful for finding dotfiles and other hidden configuration files!"
+    },
+    {
+      "title": "Clear Search Highlighting",
+      "description": "After searching with `/` or `?`, clear the search highlighting with **<leader>ur**.\n\nThis removes the distracting highlights while keeping your search in history for `n`/`N` navigation."
+    },
+    {
+      "title": "Find and Replace (Substitution)",
+      "description": "Use the substitute command to find and replace text:\n\n- `:s/old/new/` - Replace first occurrence on current line\n- `:s/old/new/g` - Replace all occurrences on current line\n- `:%s/old/new/g` - Replace all occurrences in entire file\n- `:%s/old/new/gc` - Replace with confirmation for each match\n- `:'<,'>s/old/new/g` - Replace in visual selection\n\nAdd `\\c` for case-insensitive: `:%s/old/new/gi`"
+    }
+  ]
+}

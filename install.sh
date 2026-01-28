@@ -414,13 +414,10 @@ configure_claude_code() {
 }
 
 configure_ssh() {
-  sudo chmod 666 /ssh-agent
+  sudo chmod 666 /ssh/agent
 
   # Configure SSH known_hosts
-  local script_dir
-  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
-  local target_known_hosts="${script_dir}/ssh/known_hosts"
+  local mounted_known_hosts="/ssh/known_hosts"
   local dest_ssh_dir="${HOME}/.ssh"
   local dest_known_hosts="${dest_ssh_dir}/known_hosts"
 
@@ -428,24 +425,19 @@ configure_ssh() {
   mkdir -p "$dest_ssh_dir"
   chmod 700 "$dest_ssh_dir"
 
-  if [[ ! -f "$target_known_hosts" ]]; then
-    log "WARN  Expected SSH known_hosts at: $target_known_hosts (not found). Skipping known_hosts config."
+  if [[ ! -f "$mounted_known_hosts" ]]; then
+    log "WARN  Expected mounted SSH known_hosts at: $mounted_known_hosts (not found). Skipping known_hosts config."
     return 0
   fi
 
-  # Backup existing known_hosts if present and not identical
-  if [[ -f "$dest_known_hosts" ]]; then
-    if ! cmp -s "$target_known_hosts" "$dest_known_hosts"; then
-      local backup="${dest_known_hosts}.bak.$(date +%Y%m%d%H%M%S)"
-      log "INFO  Backing up existing known_hosts: $dest_known_hosts -> $backup"
-      cp "$dest_known_hosts" "$backup"
-    fi
+  # Remove existing known_hosts if it exists (whether file or symlink)
+  if [[ -e "$dest_known_hosts" || -L "$dest_known_hosts" ]]; then
+    rm -f "$dest_known_hosts"
   fi
 
-  # Copy known_hosts file
-  cp "$target_known_hosts" "$dest_known_hosts"
-  chmod 644 "$dest_known_hosts"
-  log "INFO  Copied SSH known_hosts: $dest_known_hosts"
+  # Create symlink to mounted known_hosts
+  ln -s "$mounted_known_hosts" "$dest_known_hosts"
+  log "INFO  Linked SSH known_hosts: $dest_known_hosts -> $mounted_known_hosts"
 }
 # ---------------------------
 # Main

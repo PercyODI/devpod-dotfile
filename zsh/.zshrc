@@ -80,7 +80,7 @@ source $ZSH/oh-my-zsh.sh
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=#818181,underline"
 
 # User configuration
-export SSH_AUTH_SOCK=/ssh-agent
+export SSH_AUTH_SOCK=/ssh/agent
 
 # Claude Code API Key (pass through from environment)
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"

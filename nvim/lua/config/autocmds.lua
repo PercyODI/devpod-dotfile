@@ -29,3 +29,14 @@ timer:start(
     end
   end)
 )
+
+-- Auto-save files on buffer leave, focus lost, and vim exit
+vim.api.nvim_create_autocmd({ "BufLeave", "FocusLost", "VimLeavePre" }, {
+  desc = "Auto save",
+  group = vim.api.nvim_create_augroup("autosave", { clear = true }),
+  callback = function()
+    if vim.bo.modifiable and vim.bo.buftype == "" and vim.bo.buflisted and not vim.bo.readonly then
+      vim.cmd("silent noa up")
+    end
+  end,
+})

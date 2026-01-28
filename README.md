@@ -40,7 +40,8 @@ Secrets are expected to exist in `~/.envrc` on the via direnv host. Secrets will
 alias dup="devcontainer up \
     --workspace-folder . \
     --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
-    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh-agent \
+    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
+    --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts,readonly \
     --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
     --update-remote-user-uid-default on"
 
@@ -49,31 +50,39 @@ alias dup="devcontainer up \
 alias dup-reset="devcontainer up \
     --workspace-folder . \
     --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
-    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh-agent \
+    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
+    --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts,readonly \
     --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
     --update-remote-user-uid-default on \
     --remove-existing-container"
 
 # Starts a dev container instance using local dotfiles repo
-alias dup-local="\
+alias dup-local=" \
     devcontainer up \
         --workspace-folder . \
-        --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh-agent \
+        --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
+        --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts \
         --mount type=bind,source=${DOTFILES_DIR:-${HOME}/github/devpod-dotfile},target=/dotfiles \
         --update-remote-user-uid-default on \
         --remove-existing-container &&
     devcontainer exec \
         --workspace-folder . \
         --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-        -- bash -lc 'cd /dotfiles && ./install.sh'"
+        -- bash -c 'cd /dotfiles && ./install.sh'"
 
 # SSH into the dev container
-alias dgo='devcontainer exec \
+alias dgo="devcontainer exec \
     --workspace-folder . \
     --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-    --remote-env GIT_AUTHOR_NAME=${GIT_USER_NAME} \
-    --remote-env GIT_AUTHOR_EMAIL=${GIT_USER_EMAIL} \
-    --remote-env GIT_COMMITTER_NAME=${GIT_USER_NAME} \
-    --remote-env GIT_COMMITTER_EMAIL=${GIT_USER_EMAIL} \
-    zsh'
+    --remote-env GIT_AUTHOR_NAME=\"${GIT_USER_NAME}\" \
+    --remote-env GIT_AUTHOR_EMAIL=\"${GIT_USER_EMAIL}\" \
+    --remote-env GIT_COMMITTER_NAME=\"${GIT_USER_NAME}\" \
+    --remote-env GIT_COMMITTER_EMAIL=\"${GIT_USER_EMAIL}\" \
+    zsh"
+    
+# Create a base Typescript/Node .devcontainer 
+alias dtemp-node=" \
+  devcontainer templates apply \
+    -t ghcr.io/devcontainers/templates/typescript-node:4.0.2 \
+    --omit-paths '[\".github/\*\"]'"
 ```
