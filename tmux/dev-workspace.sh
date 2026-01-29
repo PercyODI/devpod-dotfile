@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dev-workspace.sh - Initialize a tmux development workspace with nvim, Claude, command panels
+# dev-workspace.sh - Initialize a tmux development workspace with nvim, AI assistant (Claude/Opencode), command panels
 
 set -euo pipefail
 
@@ -31,21 +31,29 @@ tmux split-window -v -l 10% -c "$WORK_DIR" -t "$SESSION_NAME:$WINDOW_NAME.0"
 # Ensure we’re operating in the top pane (pane 0) for the remaining splits
 tmux select-pane -t "$SESSION_NAME:$WINDOW_NAME.0"
 
-# Create the right Claude pane
+# Create the right AI Assistant pane
 tmux split-window -h -l 33% -c "$WORK_DIR" -t "$SESSION_NAME:$WINDOW_NAME.0"
 
 # Force command pane to correct size after all splits are complete
 # tmux resize-pane -t "$SESSION_NAME:$WINDOW_NAME.2" -y 5%
 
+# Determine which AI assistant to use based on PREFER_OPENCODE
+AI_COMMAND="claude"
+AI_TITLE="Claude"
+if [ "${PREFER_OPENCODE:-false}" = "true" ]; then
+  AI_COMMAND="opencode"
+  AI_TITLE="Opencode"
+fi
+
 # Set pane titles (requires pane-border-status for display)
 tmux select-pane -t "$SESSION_NAME:$WINDOW_NAME.0" -T "Neovim"
-tmux select-pane -t "$SESSION_NAME:$WINDOW_NAME.1" -T "Claude"
+tmux select-pane -t "$SESSION_NAME:$WINDOW_NAME.1" -T "$AI_TITLE"
 tmux select-pane -t "$SESSION_NAME:$WINDOW_NAME.2" -T "Commands"
 # tmux select-pane -t "$SESSION_NAME:$WINDOW_NAME.3" -T "Tests"
 
 # Start processes
 tmux send-keys -t "$SESSION_NAME:$WINDOW_NAME.0" "cd \"$WORK_DIR\" && nvim ." C-m
-tmux send-keys -t "$SESSION_NAME:$WINDOW_NAME.1" "cd \"$WORK_DIR\" && claude" C-m
+tmux send-keys -t "$SESSION_NAME:$WINDOW_NAME.1" "cd \"$WORK_DIR\" && $AI_COMMAND" C-m
 tmux send-keys -t "$SESSION_NAME:$WINDOW_NAME.2" "cd \"$WORK_DIR\" && echo 'Command pane - Run builds, git commands, etc.'" C-m
 # tmux send-keys -t "$SESSION_NAME:$WINDOW_NAME.3" "cd \"$WORK_DIR\" && echo 'Test watcher pane - Run your test commands here'" C-m
 

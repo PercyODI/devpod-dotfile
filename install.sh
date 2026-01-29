@@ -301,6 +301,30 @@ install_claude_code() {
   log "INFO  Claude Code installed successfully: $(command -v claude)"
 }
 
+# ---------------------------
+# Opencode install
+# ---------------------------
+install_opencode() {
+  if have opencode; then
+    log "INFO  Opencode already installed: $(command -v opencode)"
+    return 0
+  fi
+
+  log "INFO  Installing Opencode..."
+  curl -fsSL https://opencode.ai/install | bash
+
+  # Ensure ~/.opencode/bin is in PATH for current session
+  export PATH="${HOME}/.opencode/bin:${PATH}"
+
+  # Verify installation
+  if ! have opencode; then
+    log "WARN  Opencode installation completed but binary not found in PATH"
+    return 1
+  fi
+
+  log "INFO  Opencode installed successfully: $(command -v opencode)"
+}
+
 configure_claude_code() {
   local script_dir
   script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -370,7 +394,7 @@ configure_claude_code() {
       # Add API key suffix to approved list using jq
       local tmp_json
       tmp_json="$(mktemp)"
-      jq --arg key "$api_key_suffix" '.customApiKeyResponses.approved += [$key]' "$dest_claude_json" > "$tmp_json"
+      jq --arg key "$api_key_suffix" '.customApiKeyResponses.approved += [$key]' "$dest_claude_json" >"$tmp_json"
       mv "$tmp_json" "$dest_claude_json"
       log "INFO  Added API key suffix to approved list"
     else
@@ -385,7 +409,7 @@ configure_claude_code() {
   if [[ -d "/workspaces" ]]; then
     # Find first directory in /workspaces that isn't the dotfiles directory
     for dir in /workspaces/*/; do
-      dir="${dir%/}"  # Remove trailing slash
+      dir="${dir%/}" # Remove trailing slash
       if [[ "$dir" != "$script_dir" && -d "$dir" ]]; then
         project_path="$dir"
         break
@@ -402,7 +426,7 @@ configure_claude_code() {
   # Add project entry using jq
   local tmp_json
   tmp_json="$(mktemp)"
-  jq --arg path "$project_path" '.projects[$path] = {"allowedTools": [], "mcpContextUris": [], "mcpServers": {}, "enabledMcpjsonServers": [], "disabledMcpjsonServers": [], "hasTrustDialogAccepted": true}' "$dest_claude_json" > "$tmp_json"
+  jq --arg path "$project_path" '.projects[$path] = {"allowedTools": [], "mcpContextUris": [], "mcpServers": {}, "enabledMcpjsonServers": [], "disabledMcpjsonServers": [], "hasTrustDialogAccepted": true}' "$dest_claude_json" >"$tmp_json"
   mv "$tmp_json" "$dest_claude_json"
   log "INFO  Added project configuration for: $project_path"
 
@@ -410,6 +434,45 @@ configure_claude_code() {
   if have claude; then
     log "INFO  Verifying Claude Code installation..."
     claude --version || log "WARN  Claude Code verification returned non-zero exit"
+  fi
+}
+
+configure_opencode() {
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+  # Create Opencode config directory
+  mkdir -p "${HOME}/.config/opencode"
+
+  # Copy Opencode config from repo
+  local target_opencode="${script_dir}/opencode/opencode.json"
+  local dest_opencode="${HOME}/.config/opencode/opencode.json"
+
+  if [[ ! -f "$target_opencode" ]]; then
+    log "WARN  Expected Opencode config at: $target_opencode (not found). Skipping Opencode config."
+    return 0
+  fi
+
+  # Backup existing config if present
+  if [[ -e "$dest_opencode" && ! -L "$dest_opencode" ]]; then
+    local backup="${dest_opencode}.bak.$(date +%Y%m%d%H%M%S)"
+    log "INFO  Backing up existing Opencode config: $dest_opencode -> $backup"
+    mv "$dest_opencode" "$backup"
+  fi
+
+  # Remove old symlink if it points elsewhere
+  if [[ -L "$dest_opencode" ]]; then
+    rm -f "$dest_opencode"
+  fi
+
+  # Copy config to destination
+  cp "$target_opencode" "$dest_opencode"
+  log "INFO  Copied Opencode config to: $dest_opencode"
+
+  # Verify Opencode works (non-interactive test)
+  if have opencode; then
+    log "INFO  Verifying Opencode installation..."
+    opencode --version || log "WARN  Opencode verification returned non-zero exit"
   fi
 }
 
@@ -461,9 +524,15 @@ main() {
   run_step "link_nvim_zsh_lazygit_and_tmux_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
   run_step "install_lazygit" install_lazygit
-  run_step "install_claude_code" install_claude_code
-  run_step "configure_claude_code" configure_claude_code
+
+  # Install Claude Code, Opencode, and LazyVim Plugins in parallel
+  run_step "install_claude_code" install_claude_code &
+  run_step "install_opencode" install_opencode &
   run_step "lazyvim_sync_plugins" lazyvim_sync
+  wait
+
+  run_step "configure_claude_code" configure_claude_code
+  run_step "configure_opencode" configure_opencode
   run_step "configure_ssh" configure_ssh
 
   log "All steps complete."

@@ -16,8 +16,6 @@ vim.keymap.set("v", "<leader>tc", function()
   local osc52 = require("vim.ui.clipboard.osc52")
   local lines = vim.split(content, "\n")
   osc52.copy("+")(lines)
-  -- Restore visual selection
-  vim.cmd("normal! gv")
 end, { noremap = true, desc = "Copy to tmux/system clipboard" })
 -- Paste from tmux buffer
 vim.keymap.set(
