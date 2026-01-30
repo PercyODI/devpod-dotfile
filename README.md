@@ -88,8 +88,20 @@ alias dup-local=" \
         --remote-env PREFER_OPENCODE=${PREFER_OPENCODE:-false} \
         -- bash -c 'cd /dotfiles && ./install.sh'"
 
-# SSH into the dev container
+# SSH into the dev container and auto-launch tmux dev command
 alias dgo="devcontainer exec \
+    --workspace-folder . \
+    --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
+    --remote-env OPENAI_API_KEY=${OPENAI_API_KEY} \
+    --remote-env PREFER_OPENCODE=${PREFER_OPENCODE:-false} \
+    --remote-env GIT_AUTHOR_NAME=\"${GIT_USER_NAME}\" \
+    --remote-env GIT_AUTHOR_EMAIL=\"${GIT_USER_EMAIL}\" \
+    --remote-env GIT_COMMITTER_NAME=\"${GIT_USER_NAME}\" \
+    --remote-env GIT_COMMITTER_EMAIL=\"${GIT_USER_EMAIL}\" \
+    zsh -ic dev"
+
+# SSH into the dev container
+alias dgo-shell="devcontainer exec \
     --workspace-folder . \
     --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
     --remote-env OPENAI_API_KEY=${OPENAI_API_KEY} \
