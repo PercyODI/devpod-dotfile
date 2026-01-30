@@ -287,7 +287,8 @@ install_claude_code() {
   fi
 
   log "INFO  Installing Claude Code..."
-  curl -fsSL https://claude.ai/install.sh | bash
+  # Run in non-interactive mode to avoid terminal control sequences
+  curl -fsSL https://claude.ai/install.sh | bash -s -- 2>&1 | cat
 
   # Ensure ~/.local/bin is in PATH for current session
   export PATH="${HOME}/.local/bin:${PATH}"
@@ -311,7 +312,8 @@ install_opencode() {
   fi
 
   log "INFO  Installing Opencode..."
-  curl -fsSL https://opencode.ai/install | bash
+  # Run in non-interactive mode to avoid terminal control sequences
+  curl -fsSL https://opencode.ai/install | bash -s -- 2>&1 | cat
 
   # Ensure ~/.opencode/bin is in PATH for current session
   export PATH="${HOME}/.opencode/bin:${PATH}"
@@ -502,6 +504,180 @@ configure_ssh() {
   ln -s "$mounted_known_hosts" "$dest_known_hosts"
   log "INFO  Linked SSH known_hosts: $dest_known_hosts -> $mounted_known_hosts"
 }
+
+# ---------------------------
+# Run multiple steps in parallel with side-by-side output
+# ---------------------------
+run_steps_parallel() {
+  local -a names=()
+  local -a funcs=()
+  local -a pids=()
+  local -a tmpfiles=()
+  local -a markers=()
+
+  # Parse arguments: name1 func1 name2 func2 ...
+  while [[ $# -gt 0 ]]; do
+    names+=("$1")
+    funcs+=("$2")
+    shift 2
+  done
+
+  local num_tasks=${#names[@]}
+  if [[ $num_tasks -eq 0 ]]; then
+    return 0
+  fi
+
+  # Check if any tasks are already done
+  local -a pending_names=()
+  local -a pending_funcs=()
+  for i in "${!names[@]}"; do
+    local m="$(mark_path "${names[$i]}")"
+    if [[ -f "$m" ]]; then
+      log "SKIP  ${names[$i]} (marker exists: $m)"
+    else
+      pending_names+=("${names[$i]}")
+      pending_funcs+=("${funcs[$i]}")
+    fi
+  done
+
+  # If nothing to do, return
+  if [[ ${#pending_names[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  # Start all tasks in background
+  for i in "${!pending_names[@]}"; do
+    local name="${pending_names[$i]}"
+    local func="${pending_funcs[$i]}"
+    local tmpfile="$(mktemp)"
+    local m="$(mark_path "$name")"
+
+    tmpfiles+=("$tmpfile")
+    markers+=("$m")
+
+    log "RUN   $name (parallel)"
+
+    # Run in background, redirecting all output to tmpfile
+    (
+      "$func" >"$tmpfile" 2>&1
+      local exit_code=$?
+      if [[ $exit_code -eq 0 ]]; then
+        : >"$m"
+        echo "[DONE] $name" >>"$tmpfile"
+      else
+        echo "[FAILED] $name (exit code: $exit_code)" >>"$tmpfile"
+      fi
+    ) &
+
+    pids+=($!)
+  done
+
+  # Print initial header
+  printf "\n=== Installing in parallel (monitoring progress) ===\n"
+
+  # Monitor progress with side-by-side display
+  # Fixed display height: 1 header line + 10 content lines = 11 lines total
+  local display_lines=11
+  local still_running=true
+  local first_iteration=true
+
+  while $still_running; do
+    still_running=false
+
+    # Check if any process is still running
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        still_running=true
+        break
+      fi
+    done
+
+    # Move cursor back up to overwrite previous output (except on first iteration)
+    if [[ "$first_iteration" = false ]]; then
+      tput cuu $display_lines
+    fi
+    first_iteration=false
+
+    # Get last 10 lines from each tmpfile and display side-by-side
+    # Strip ANSI escape codes, carriage returns, and other control characters to prevent display issues
+    # This removes: escape sequences, CR, backspace, and other non-printable characters except newline/tab
+    local sanitize='sed "s/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\r//g; s/[\x08\x0B\x0C]//g"'
+    local output=""
+    if [[ ${#tmpfiles[@]} -eq 1 ]]; then
+      # Single column: header + 10 lines
+      output=$(echo "=== ${pending_names[0]} ===" && tail -n 10 "${tmpfiles[0]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "")
+    elif [[ ${#tmpfiles[@]} -eq 2 ]]; then
+      # Two columns
+      output=$(pr -m -t -w "$(tput cols)" \
+        <(echo "=== ${pending_names[0]} ===" && tail -n 10 "${tmpfiles[0]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") \
+        <(echo "=== ${pending_names[1]} ===" && tail -n 10 "${tmpfiles[1]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") 2>/dev/null || echo "")
+    else
+      # Three or more columns
+      output=$(pr -m -t -w "$(tput cols)" \
+        <(echo "=== ${pending_names[0]} ===" && tail -n 10 "${tmpfiles[0]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") \
+        <(echo "=== ${pending_names[1]} ===" && tail -n 10 "${tmpfiles[1]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") \
+        <(echo "=== ${pending_names[2]:-} ===" && tail -n 10 "${tmpfiles[2]:-/dev/null}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") 2>/dev/null || echo "")
+    fi
+
+    # Print exactly display_lines lines (pad with empty lines if needed)
+    local line_count=0
+    while IFS= read -r line && [[ $line_count -lt $display_lines ]]; do
+      tput el # Clear to end of line
+      printf "%s\n" "$line"
+      line_count=$((line_count + 1))
+    done <<<"$output"
+
+    # Pad with empty lines to maintain fixed height
+    while [[ $line_count -lt $display_lines ]]; do
+      tput el
+      printf "\n"
+      line_count=$((line_count + 1))
+    done
+
+    if $still_running; then
+      sleep 0.2
+    fi
+  done
+
+  # Wait for all processes to complete
+  wait
+
+  # Show final output - leave the last display in place
+  printf "\n\n=== Parallel installation complete ===\n\n"
+
+  # Check for failures and show full output for failed tasks
+  local has_failures=false
+  for i in "${!pending_names[@]}"; do
+    local name="${pending_names[$i]}"
+    local tmpfile="${tmpfiles[$i]}"
+    local m="${markers[$i]}"
+
+    if [[ -f "$m" ]]; then
+      log "DONE  $name"
+    else
+      has_failures=true
+      log "FAILED  $name"
+      printf "\n--- Full output for: %s ---\n" "$name"
+      cat "$tmpfile"
+      printf "\n"
+    fi
+  done
+
+  # If no failures, we're done
+  if [[ "$has_failures" = true ]]; then
+    log "ERROR Some parallel tasks failed. See output above."
+    # Cleanup temp files
+    for tmpfile in "${tmpfiles[@]}"; do
+      rm -f "$tmpfile"
+    done
+    return 1
+  fi
+
+  # Cleanup temp files
+  for tmpfile in "${tmpfiles[@]}"; do
+    rm -f "$tmpfile"
+  done
+}
 # ---------------------------
 # Main
 # ---------------------------
@@ -525,11 +701,11 @@ main() {
   # run_step "set_default_shell_zsh" set_default_shell_zsh
   run_step "install_lazygit" install_lazygit
 
-  # Install Claude Code, Opencode, and LazyVim Plugins in parallel
-  run_step "install_claude_code" install_claude_code &
-  run_step "install_opencode" install_opencode &
-  run_step "lazyvim_sync_plugins" lazyvim_sync
-  wait
+  # Install Claude Code, Opencode, and LazyVim Plugins in parallel with side-by-side output
+  run_steps_parallel \
+    "install_claude_code" install_claude_code \
+    "install_opencode" install_opencode \
+    "lazyvim_sync_plugins" lazyvim_sync
 
   run_step "configure_claude_code" configure_claude_code
   run_step "configure_opencode" configure_opencode
