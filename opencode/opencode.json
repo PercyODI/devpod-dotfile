@@ -1,0 +1,35 @@
+{
+  // Global Opencode configuration
+  // This file is copied to ~/.config/opencode/opencode.json during installation
+
+  // API Configuration
+  "provider": {
+    "anthropic": {
+      "options": {
+        "apiKey": "{env:ANTHROPIC_API_KEY}"
+      }
+    },
+    "openai": {
+      "options": {
+        "apiKey": "{env:OPENAI_API_KEY}"
+      }
+    },
+  },
+
+  // Default model
+  "model": "anthropic/claude-sonnet-4-5",
+
+  // Permissions - set to "ask" for approval prompts, or remove for allow-all
+  "permission": "ask",
+
+  // Enable auto-updates
+  "autoupdate": true,
+
+  // Theme (can be customized)
+  "theme": "tokyonight",
+
+  // TUI preferences
+  "tui": {
+    "scroll_speed": 3
+  }
+}

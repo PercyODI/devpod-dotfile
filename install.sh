@@ -287,7 +287,8 @@ install_claude_code() {
   fi
 
   log "INFO  Installing Claude Code..."
-  curl -fsSL https://claude.ai/install.sh | bash
+  # Run in non-interactive mode to avoid terminal control sequences
+  curl -fsSL https://claude.ai/install.sh | bash -s -- 2>&1 | cat
 
   # Ensure ~/.local/bin is in PATH for current session
   export PATH="${HOME}/.local/bin:${PATH}"
@@ -299,6 +300,31 @@ install_claude_code() {
   fi
 
   log "INFO  Claude Code installed successfully: $(command -v claude)"
+}
+
+# ---------------------------
+# Opencode install
+# ---------------------------
+install_opencode() {
+  if have opencode; then
+    log "INFO  Opencode already installed: $(command -v opencode)"
+    return 0
+  fi
+
+  log "INFO  Installing Opencode..."
+  # Run in non-interactive mode to avoid terminal control sequences
+  curl -fsSL https://opencode.ai/install | bash -s -- 2>&1 | cat
+
+  # Ensure ~/.opencode/bin is in PATH for current session
+  export PATH="${HOME}/.opencode/bin:${PATH}"
+
+  # Verify installation
+  if ! have opencode; then
+    log "WARN  Opencode installation completed but binary not found in PATH"
+    return 1
+  fi
+
+  log "INFO  Opencode installed successfully: $(command -v opencode)"
 }
 
 configure_claude_code() {
@@ -370,7 +396,7 @@ configure_claude_code() {
       # Add API key suffix to approved list using jq
       local tmp_json
       tmp_json="$(mktemp)"
-      jq --arg key "$api_key_suffix" '.customApiKeyResponses.approved += [$key]' "$dest_claude_json" > "$tmp_json"
+      jq --arg key "$api_key_suffix" '.customApiKeyResponses.approved += [$key]' "$dest_claude_json" >"$tmp_json"
       mv "$tmp_json" "$dest_claude_json"
       log "INFO  Added API key suffix to approved list"
     else
@@ -385,7 +411,7 @@ configure_claude_code() {
   if [[ -d "/workspaces" ]]; then
     # Find first directory in /workspaces that isn't the dotfiles directory
     for dir in /workspaces/*/; do
-      dir="${dir%/}"  # Remove trailing slash
+      dir="${dir%/}" # Remove trailing slash
       if [[ "$dir" != "$script_dir" && -d "$dir" ]]; then
         project_path="$dir"
         break
@@ -402,7 +428,7 @@ configure_claude_code() {
   # Add project entry using jq
   local tmp_json
   tmp_json="$(mktemp)"
-  jq --arg path "$project_path" '.projects[$path] = {"allowedTools": [], "mcpContextUris": [], "mcpServers": {}, "enabledMcpjsonServers": [], "disabledMcpjsonServers": [], "hasTrustDialogAccepted": true}' "$dest_claude_json" > "$tmp_json"
+  jq --arg path "$project_path" '.projects[$path] = {"allowedTools": [], "mcpContextUris": [], "mcpServers": {}, "enabledMcpjsonServers": [], "disabledMcpjsonServers": [], "hasTrustDialogAccepted": true}' "$dest_claude_json" >"$tmp_json"
   mv "$tmp_json" "$dest_claude_json"
   log "INFO  Added project configuration for: $project_path"
 
@@ -413,14 +439,50 @@ configure_claude_code() {
   fi
 }
 
-configure_ssh() {
-  sudo chmod 666 /ssh-agent
-
-  # Configure SSH known_hosts
+configure_opencode() {
   local script_dir
   script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-  local target_known_hosts="${script_dir}/ssh/known_hosts"
+  # Create Opencode config directory
+  mkdir -p "${HOME}/.config/opencode"
+
+  # Copy Opencode config from repo
+  local target_opencode="${script_dir}/opencode/opencode.json"
+  local dest_opencode="${HOME}/.config/opencode/opencode.json"
+
+  if [[ ! -f "$target_opencode" ]]; then
+    log "WARN  Expected Opencode config at: $target_opencode (not found). Skipping Opencode config."
+    return 0
+  fi
+
+  # Backup existing config if present
+  if [[ -e "$dest_opencode" && ! -L "$dest_opencode" ]]; then
+    local backup="${dest_opencode}.bak.$(date +%Y%m%d%H%M%S)"
+    log "INFO  Backing up existing Opencode config: $dest_opencode -> $backup"
+    mv "$dest_opencode" "$backup"
+  fi
+
+  # Remove old symlink if it points elsewhere
+  if [[ -L "$dest_opencode" ]]; then
+    rm -f "$dest_opencode"
+  fi
+
+  # Copy config to destination
+  cp "$target_opencode" "$dest_opencode"
+  log "INFO  Copied Opencode config to: $dest_opencode"
+
+  # Verify Opencode works (non-interactive test)
+  if have opencode; then
+    log "INFO  Verifying Opencode installation..."
+    opencode --version || log "WARN  Opencode verification returned non-zero exit"
+  fi
+}
+
+configure_ssh() {
+  sudo chmod 666 /ssh/agent
+
+  # Configure SSH known_hosts
+  local mounted_known_hosts="/ssh/known_hosts"
   local dest_ssh_dir="${HOME}/.ssh"
   local dest_known_hosts="${dest_ssh_dir}/known_hosts"
 
@@ -428,24 +490,193 @@ configure_ssh() {
   mkdir -p "$dest_ssh_dir"
   chmod 700 "$dest_ssh_dir"
 
-  if [[ ! -f "$target_known_hosts" ]]; then
-    log "WARN  Expected SSH known_hosts at: $target_known_hosts (not found). Skipping known_hosts config."
+  if [[ ! -f "$mounted_known_hosts" ]]; then
+    log "WARN  Expected mounted SSH known_hosts at: $mounted_known_hosts (not found). Skipping known_hosts config."
     return 0
   fi
 
-  # Backup existing known_hosts if present and not identical
-  if [[ -f "$dest_known_hosts" ]]; then
-    if ! cmp -s "$target_known_hosts" "$dest_known_hosts"; then
-      local backup="${dest_known_hosts}.bak.$(date +%Y%m%d%H%M%S)"
-      log "INFO  Backing up existing known_hosts: $dest_known_hosts -> $backup"
-      cp "$dest_known_hosts" "$backup"
-    fi
+  # Remove existing known_hosts if it exists (whether file or symlink)
+  if [[ -e "$dest_known_hosts" || -L "$dest_known_hosts" ]]; then
+    rm -f "$dest_known_hosts"
   fi
 
-  # Copy known_hosts file
-  cp "$target_known_hosts" "$dest_known_hosts"
-  chmod 644 "$dest_known_hosts"
-  log "INFO  Copied SSH known_hosts: $dest_known_hosts"
+  # Create symlink to mounted known_hosts
+  ln -s "$mounted_known_hosts" "$dest_known_hosts"
+  log "INFO  Linked SSH known_hosts: $dest_known_hosts -> $mounted_known_hosts"
+}
+
+# ---------------------------
+# Run multiple steps in parallel with side-by-side output
+# ---------------------------
+run_steps_parallel() {
+  local -a names=()
+  local -a funcs=()
+  local -a pids=()
+  local -a tmpfiles=()
+  local -a markers=()
+
+  # Parse arguments: name1 func1 name2 func2 ...
+  while [[ $# -gt 0 ]]; do
+    names+=("$1")
+    funcs+=("$2")
+    shift 2
+  done
+
+  local num_tasks=${#names[@]}
+  if [[ $num_tasks -eq 0 ]]; then
+    return 0
+  fi
+
+  # Check if any tasks are already done
+  local -a pending_names=()
+  local -a pending_funcs=()
+  for i in "${!names[@]}"; do
+    local m="$(mark_path "${names[$i]}")"
+    if [[ -f "$m" ]]; then
+      log "SKIP  ${names[$i]} (marker exists: $m)"
+    else
+      pending_names+=("${names[$i]}")
+      pending_funcs+=("${funcs[$i]}")
+    fi
+  done
+
+  # If nothing to do, return
+  if [[ ${#pending_names[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  # Start all tasks in background
+  for i in "${!pending_names[@]}"; do
+    local name="${pending_names[$i]}"
+    local func="${pending_funcs[$i]}"
+    local tmpfile="$(mktemp)"
+    local m="$(mark_path "$name")"
+
+    tmpfiles+=("$tmpfile")
+    markers+=("$m")
+
+    log "RUN   $name (parallel)"
+
+    # Run in background, redirecting all output to tmpfile
+    (
+      "$func" >"$tmpfile" 2>&1
+      local exit_code=$?
+      if [[ $exit_code -eq 0 ]]; then
+        : >"$m"
+        echo "[DONE] $name" >>"$tmpfile"
+      else
+        echo "[FAILED] $name (exit code: $exit_code)" >>"$tmpfile"
+      fi
+    ) &
+
+    pids+=($!)
+  done
+
+  # Print initial header
+  printf "\n=== Installing in parallel (monitoring progress) ===\n"
+
+  # Monitor progress with side-by-side display
+  # Fixed display height: 1 header line + 10 content lines = 11 lines total
+  local display_lines=11
+  local still_running=true
+  local first_iteration=true
+
+  while $still_running; do
+    still_running=false
+
+    # Check if any process is still running
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        still_running=true
+        break
+      fi
+    done
+
+    # Move cursor back up to overwrite previous output (except on first iteration)
+    if [[ "$first_iteration" = false ]]; then
+      tput cuu $display_lines
+    fi
+    first_iteration=false
+
+    # Get last 10 lines from each tmpfile and display side-by-side
+    # Strip ANSI escape codes, carriage returns, and other control characters to prevent display issues
+    # This removes: escape sequences, CR, backspace, and other non-printable characters except newline/tab
+    local sanitize='sed "s/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x1b[()][AB012]//g; s/\r//g; s/[\x08\x0B\x0C]//g"'
+    local output=""
+    if [[ ${#tmpfiles[@]} -eq 1 ]]; then
+      # Single column: header + 10 lines
+      output=$(echo "=== ${pending_names[0]} ===" && tail -n 10 "${tmpfiles[0]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "")
+    elif [[ ${#tmpfiles[@]} -eq 2 ]]; then
+      # Two columns
+      output=$(pr -m -t -w "$(tput cols)" \
+        <(echo "=== ${pending_names[0]} ===" && tail -n 10 "${tmpfiles[0]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") \
+        <(echo "=== ${pending_names[1]} ===" && tail -n 10 "${tmpfiles[1]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") 2>/dev/null || echo "")
+    else
+      # Three or more columns
+      output=$(pr -m -t -w "$(tput cols)" \
+        <(echo "=== ${pending_names[0]} ===" && tail -n 10 "${tmpfiles[0]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") \
+        <(echo "=== ${pending_names[1]} ===" && tail -n 10 "${tmpfiles[1]}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") \
+        <(echo "=== ${pending_names[2]:-} ===" && tail -n 10 "${tmpfiles[2]:-/dev/null}" 2>/dev/null | eval "$sanitize" | head -n 10 || echo "") 2>/dev/null || echo "")
+    fi
+
+    # Print exactly display_lines lines (pad with empty lines if needed)
+    local line_count=0
+    while IFS= read -r line && [[ $line_count -lt $display_lines ]]; do
+      tput el # Clear to end of line
+      printf "%s\n" "$line"
+      line_count=$((line_count + 1))
+    done <<<"$output"
+
+    # Pad with empty lines to maintain fixed height
+    while [[ $line_count -lt $display_lines ]]; do
+      tput el
+      printf "\n"
+      line_count=$((line_count + 1))
+    done
+
+    if $still_running; then
+      sleep 0.2
+    fi
+  done
+
+  # Wait for all processes to complete
+  wait
+
+  # Show final output - leave the last display in place
+  printf "\n\n=== Parallel installation complete ===\n\n"
+
+  # Check for failures and show full output for failed tasks
+  local has_failures=false
+  for i in "${!pending_names[@]}"; do
+    local name="${pending_names[$i]}"
+    local tmpfile="${tmpfiles[$i]}"
+    local m="${markers[$i]}"
+
+    if [[ -f "$m" ]]; then
+      log "DONE  $name"
+    else
+      has_failures=true
+      log "FAILED  $name"
+      printf "\n--- Full output for: %s ---\n" "$name"
+      cat "$tmpfile"
+      printf "\n"
+    fi
+  done
+
+  # If no failures, we're done
+  if [[ "$has_failures" = true ]]; then
+    log "ERROR Some parallel tasks failed. See output above."
+    # Cleanup temp files
+    for tmpfile in "${tmpfiles[@]}"; do
+      rm -f "$tmpfile"
+    done
+    return 1
+  fi
+
+  # Cleanup temp files
+  for tmpfile in "${tmpfiles[@]}"; do
+    rm -f "$tmpfile"
+  done
 }
 # ---------------------------
 # Main
@@ -469,9 +700,15 @@ main() {
   run_step "link_nvim_zsh_lazygit_and_tmux_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
   run_step "install_lazygit" install_lazygit
-  run_step "install_claude_code" install_claude_code
+
+  # Install Claude Code, Opencode, and LazyVim Plugins in parallel with side-by-side output
+  run_steps_parallel \
+    "install_claude_code" install_claude_code \
+    "install_opencode" install_opencode \
+    "lazyvim_sync_plugins" lazyvim_sync
+
   run_step "configure_claude_code" configure_claude_code
-  run_step "lazyvim_sync_plugins" lazyvim_sync
+  run_step "configure_opencode" configure_opencode
   run_step "configure_ssh" configure_ssh
 
   log "All steps complete."

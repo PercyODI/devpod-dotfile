@@ -3,6 +3,7 @@ return {
   opts = {
     explorer = {
       replace_netrw = false,
+      trash = false,
     },
   },
 }

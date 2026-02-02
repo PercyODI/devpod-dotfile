@@ -1,0 +1,5 @@
+# SSH known_hosts should be mounted from host
+ssh/known_hosts
+
+# Claude files (generated during installation)
+.claude/

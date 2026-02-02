@@ -80,13 +80,20 @@ source $ZSH/oh-my-zsh.sh
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE="fg=#818181,underline"
 
 # User configuration
-export SSH_AUTH_SOCK=/ssh-agent
+export SSH_AUTH_SOCK=/ssh/agent
 
-# Claude Code API Key (pass through from environment)
+# AI API Keys (pass through from environment)
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+export OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+
+# Prefer Opencode over Claude Code (set to "true" to use Opencode as default)
+export PREFER_OPENCODE="${PREFER_OPENCODE:-false}"
 
 # Ensure ~/.local/bin is in PATH (for Claude Code and other user binaries)
 export PATH="${HOME}/.local/bin:${PATH}"
+
+# Ensure ~/.opencode/bin is in PATH (for Opencode)
+export PATH="${HOME}/.opencode/bin:${PATH}"
 
 # export MANPATH="/usr/local/man:$MANPATH"
 
