@@ -6,6 +6,22 @@ A Dotfile repo specifically for devpod environments
 
 The following is required on the host system. Currently, no automation is set up for this, as it can vary a lot.
 
+### Setup
+
+Clone this repository to a known location on your host system:
+
+```bash
+git clone https://github.com/PercyODI/devpod-dotfile.git ~/github/devpod-dotfile
+```
+
+Add the `host/bin` directory to your PATH by adding the following line to your shell configuration file (`.bashrc`, `.zshrc`, etc.):
+
+```bash
+export PATH="$HOME/github/devpod-dotfile/host/bin:$PATH"
+```
+
+After reloading your shell configuration (or opening a new terminal), you'll have access to the `d*` commands (e.g., `dup`, `dup-reset`, `dup-local`, `dgo`, `dgo-shell`, `dtemp-node`).
+
 ### Installed Applications
 
 - Docker Desktop
@@ -45,7 +61,9 @@ export PREFER_OPENCODE=true
 
 When you run the `dev` command, it will automatically launch the preferred AI assistant in the tmux pane.
 
-## Aliases
+## Available Commands
+
+After adding `host/bin` to your PATH, the following commands are available. Alternatively, you can define these as aliases in your shell configuration:
 
 ```terminal
 # Starts a dev container instance on the current working directory.

@@ -3,3 +3,6 @@ ssh/known_hosts
 
 # Claude files (generated during installation)
 .claude/
+
+# Mac .DS_Store
+.DS_Store

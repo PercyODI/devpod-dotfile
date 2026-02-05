@@ -6,7 +6,7 @@ vim.keymap.set("i", "jk", "<Esc>", { noremap = true, silent = true })
 
 -- Tmux copy/paste integration
 -- Copy visual selection to tmux buffer and send to system clipboard via OSC 52
-vim.keymap.set("v", "<leader>tc", function()
+vim.keymap.set("v", "<leader>yc", function()
   -- Yank to register 0
   vim.cmd("normal! y")
   local content = vim.fn.getreg("0")
@@ -20,7 +20,11 @@ end, { noremap = true, desc = "Copy to tmux/system clipboard" })
 -- Paste from tmux buffer
 vim.keymap.set(
   "n",
-  "<leader>tp",
+  "<leader>yp",
   ':let @0 = system("tmux save-buffer -")<cr>"0p<cr>g;',
   { noremap = true, desc = "Paste from tmux buffer" }
 )
+
+-- Keybinding for moving buffers in their buffer line
+vim.keymap.set("n", "<leader>bH", "<cmd>BufferLineMovePrev<CR>", { desc = "Move buffer left" })
+vim.keymap.set("n", "<leader>bL", "<cmd>BufferLineMoveNext<CR>", { desc = "Move buffer right" })

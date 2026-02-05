@@ -478,6 +478,20 @@ configure_opencode() {
   fi
 }
 
+configure_git() {
+  # Configure git to trust all workspace directories
+  # This prevents "dubious ownership" errors in devcontainers
+  # where the filesystem owner may not match the container user
+
+  if ! have git; then
+    log "WARN  git not found; skipping git configuration"
+    return 0
+  fi
+
+  git config --global --add safe.directory '/workspaces/*' || true
+  log "INFO  Configured git safe.directory: /workspaces/*"
+}
+
 configure_ssh() {
   sudo chmod 666 /ssh/agent
 
@@ -707,6 +721,7 @@ main() {
     "install_opencode" install_opencode \
     "lazyvim_sync_plugins" lazyvim_sync
 
+  run_step "configure_git" configure_git
   run_step "configure_claude_code" configure_claude_code
   run_step "configure_opencode" configure_opencode
   run_step "configure_ssh" configure_ssh

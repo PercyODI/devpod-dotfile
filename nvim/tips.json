@@ -19,6 +19,14 @@
     {
       "title": "Find and Replace (Substitution)",
       "description": "Use the substitute command to find and replace text:\n\n- `:s/old/new/` - Replace first occurrence on current line\n- `:s/old/new/g` - Replace all occurrences on current line\n- `:%s/old/new/g` - Replace all occurrences in entire file\n- `:%s/old/new/gc` - Replace with confirmation for each match\n- `:'<,'>s/old/new/g` - Replace in visual selection\n\nAdd `\\c` for case-insensitive: `:%s/old/new/gi`"
+    },
+    {
+      "title": "Block-wise Motion Controls",
+      "description": "Navigate and select code by blocks/paragraphs:\n\n**Normal Mode Navigation:**\n- `{` - Jump to previous blank line or block\n- `}` - Jump to next blank line or block\n- `[[` - Jump to previous section/function start\n- `]]` - Jump to next section/function start\n\n**Visual Mode Selection:**\n- Enter visual mode with `v`, then use `{` or `}` to expand selection to include blocks\n- `V` then `}` - Select entire blocks line-wise\n- Repeat to keep expanding to outer blocks"
+    },
+    {
+      "title": "Incrementally Expand/Shrink Visual Selection",
+      "description": "Use Treesitter-aware incremental selection to grow or shrink your selection:\n\n**While in Visual Mode:**\n- `<C-Space>` - Expand selection to next syntax node (function, block, etc.)\n- `<BS>` (Backspace) - Shrink selection to previous syntax node\n\n**From Normal Mode:**\n- `<C-Space>` - Start incremental selection at cursor\n- Keep pressing `<C-Space>` to expand outward through syntax blocks\n- Use `<BS>` to shrink back down\n\n**Example:** Inside `{ }`, press `<C-Space>` repeatedly to select: word → statement → inner block → entire block → function → class"
     }
   ]
 }

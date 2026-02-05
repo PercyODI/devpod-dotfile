@@ -151,13 +151,13 @@ return {
       desc = "Show a random LazyVim tip",
     })
 
-    -- Show tip on startup with delay
-    vim.api.nvim_create_autocmd("VimEnter", {
-      callback = function()
-        vim.defer_fn(show_tip, 100)
-      end,
-      desc = "Show random tip on startup",
-    })
+    -- -- Show tip on startup with delay
+    -- vim.api.nvim_create_autocmd("VimEnter", {
+    --   callback = function()
+    --     vim.defer_fn(show_tip, 100)
+    --   end,
+    --   desc = "Show random tip on startup",
+    -- })
 
     return opts
   end,
