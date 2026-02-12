@@ -61,9 +61,124 @@ export PREFER_OPENCODE=true
 
 When you run the `dev` command, it will automatically launch the preferred AI assistant in the tmux pane.
 
-## Available Commands
+## Working with Git Worktrees
 
-After adding `host/bin` to your PATH, the following commands are available. Alternatively, you can define these as aliases in your shell configuration:
+The `dv` command provides integrated support for git worktrees, allowing you to work on multiple branches simultaneously with isolated devcontainers.
+
+### Quick Start with Worktrees
+
+1. **Clone a repository with worktree structure:**
+   ```bash
+   dv clone git@github.com:user/repo.git
+   # Creates:
+   #   repo/
+   #     .bare/          # Bare git repository
+   #     main/           # Main branch worktree (with devcontainer)
+   ```
+
+2. **Create a new worktree for a branch:**
+   ```bash
+   cd repo/main
+   dv worktree add feature-branch
+   # Creates new worktree and starts devcontainer automatically
+   ```
+
+3. **Switch between worktrees:**
+   ```bash
+   cd repo/feature-branch
+   # Or use dv go to target a specific worktree
+   dv go feature-branch
+   ```
+
+4. **View all worktrees:**
+   ```bash
+   dv worktree list
+   # Shows all worktrees with container status
+   ```
+
+5. **Check current status:**
+   ```bash
+   dv status
+   # Shows current worktree, branch, and container status
+   ```
+
+### Project Structure with Worktrees
+
+```
+project-name/
+├── .bare/              # Bare git repository
+├── main/               # Main branch worktree (with devcontainer)
+├── feature-123/        # Feature branch worktree (with devcontainer)
+└── bugfix-456/         # Another worktree (with devcontainer)
+```
+
+Each worktree gets its own isolated devcontainer, allowing you to:
+- Work on multiple branches without switching
+- Run different versions simultaneously
+- Test features independently
+- Keep separate node_modules per branch
+
+### Working with Worktrees
+
+The `dv` command supports optional worktree arguments on most commands, allowing you to target any worktree from the project root:
+
+```bash
+# Target specific worktrees without changing directory
+dv go feature-123               # Enter feature-123 worktree
+dv up main                      # Start main worktree
+dv down bugfix-42               # Stop bugfix-42 worktree
+dv exec feature-123 -- npm test # Run tests in specific worktree
+
+# Interactive selection when ambiguous
+cd project-root
+dv go                    # Prompts to select from available worktrees
+
+# Still works from within worktrees
+cd project-root/feature-123
+dv go                    # Uses current worktree (feature-123)
+```
+
+**When no worktree is specified:**
+- Uses current directory if you're in a worktree
+- Prompts for selection if multiple worktrees exist at project root
+- Uses current directory for non-worktree projects
+
+For more details, run `dv --help` or `dv <command> --help`.
+
+## The `dv` Command
+
+The `dv` command is a unified devcontainer management tool with worktree support.
+
+### Basic Commands
+
+```bash
+dv up                  # Start devcontainer (local dotfiles)
+dv up --dotfile        # Start devcontainer (GitHub dotfiles)
+dv go                  # Enter container and run dev
+dv go --shell          # Open interactive shell
+dv down                # Stop and remove container
+dv exec <command>      # Run command in container
+```
+
+### Worktree Commands
+
+```bash
+dv clone <url> [name]            # Clone as bare repo with worktrees
+dv worktree add <branch>         # Create worktree and start container
+dv worktree list                 # List all worktrees
+dv worktree remove <branch>      # Remove worktree and container
+dv status                        # Show current worktree status
+```
+
+### Aliases
+
+The following shortcuts are available:
+- `dv wt` = `dv worktree`
+- `dv st` = `dv status`
+
+## Available Commands (Legacy)
+
+After adding `host/bin` to your PATH, the following legacy commands are still available for backwards compatibility:
 
 ```terminal
 # Starts a dev container instance on the current working directory.

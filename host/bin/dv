@@ -1,0 +1,1202 @@
+#!/usr/bin/env bash
+
+set -e
+
+# Check bash version (require 4.0+)
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "Error: This script requires bash 4.0 or higher (current: $BASH_VERSION)" >&2
+  echo "" >&2
+  echo "On macOS, install via Homebrew:" >&2
+  echo "  brew install bash" >&2
+  echo "" >&2
+  echo "Then run the script with:" >&2
+  echo "  /opt/homebrew/bin/bash $(realpath "$0") $*" >&2
+  echo "" >&2
+  echo "Or update the shebang to: #!/opt/homebrew/bin/bash" >&2
+  exit 1
+fi
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Helper function to print colored messages
+error() {
+  echo -e "${RED}Error: $1${NC}" >&2
+}
+
+success() {
+  echo -e "${GREEN}$1${NC}"
+}
+
+warning() {
+  echo -e "${YELLOW}$1${NC}"
+}
+
+# Build array of remote environment arguments
+# Sets global REMOTE_ENV_ARGS array
+get_remote_env_args() {
+  REMOTE_ENV_ARGS=()
+  [[ -n "${ANTHROPIC_API_KEY}" ]] && REMOTE_ENV_ARGS+=(--remote-env "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}")
+  [[ -n "${OPENAI_API_KEY}" ]] && REMOTE_ENV_ARGS+=(--remote-env "OPENAI_API_KEY=${OPENAI_API_KEY}")
+  REMOTE_ENV_ARGS+=(--remote-env "PREFER_OPENCODE=${PREFER_OPENCODE:-false}")
+  [[ -n "${GIT_USER_NAME}" ]] && REMOTE_ENV_ARGS+=(--remote-env "GIT_AUTHOR_NAME=${GIT_USER_NAME}")
+  [[ -n "${GIT_USER_EMAIL}" ]] && REMOTE_ENV_ARGS+=(--remote-env "GIT_AUTHOR_EMAIL=${GIT_USER_EMAIL}")
+  [[ -n "${GIT_USER_NAME}" ]] && REMOTE_ENV_ARGS+=(--remote-env "GIT_COMMITTER_NAME=${GIT_USER_NAME}")
+  [[ -n "${GIT_USER_EMAIL}" ]] && REMOTE_ENV_ARGS+=(--remote-env "GIT_COMMITTER_EMAIL=${GIT_USER_EMAIL}")
+}
+
+# Git worktree helper functions
+is_worktree() {
+  git rev-parse --is-inside-work-tree &>/dev/null
+}
+
+find_bare_repo() {
+  # Look for .bare directory in parent directories
+  local dir="$(pwd)"
+  while [[ "$dir" != "/" ]]; do
+    if [[ -d "$dir/.bare" ]]; then
+      echo "$dir/.bare"
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+  return 1
+}
+
+get_worktree_root() {
+  # Get the parent directory containing .bare
+  local bare_repo=$(find_bare_repo)
+  if [[ -n "$bare_repo" ]]; then
+    dirname "$bare_repo"
+  else
+    pwd
+  fi
+}
+
+get_container_status() {
+  local workspace_path="$1"
+  local container_id=$(docker ps -aq \
+    --filter "label=devcontainer.local_folder=${workspace_path}")
+
+  if [[ -z "$container_id" ]]; then
+    echo "none"
+    return
+  fi
+
+  local status=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null)
+  if [[ "$status" == "running" ]]; then
+    echo "running"
+  elif [[ -n "$status" ]]; then
+    echo "stopped"
+  else
+    echo "none"
+  fi
+}
+
+select_branch() {
+  local bare_repo="$1"
+  local prompt="${2:-Select branch:}"
+
+  # Get list of branches (local and remote)
+  local branches=$(git --git-dir="$bare_repo" branch -a |
+    sed 's/^[* ] //' |
+    sed 's|remotes/origin/||' |
+    grep -v HEAD |
+    sort -u)
+
+  # Try to use fzf if available
+  if command -v fzf &>/dev/null; then
+    echo "$branches" | fzf --prompt="$prompt " --height=40% --reverse
+  else
+    # Fallback to select
+    echo "$prompt" >&2
+    select branch in $branches; do
+      if [[ -n "$branch" ]]; then
+        echo "$branch"
+        break
+      fi
+    done
+  fi
+}
+
+# Check if a directory is a valid git worktree
+is_git_worktree() {
+  local path="$1"
+  [[ -d "$path" ]] && git -C "$path" rev-parse --is-inside-work-tree &>/dev/null
+}
+
+# Interactive worktree selection with container status indicators
+select_worktree() {
+  local bare_repo="$1"
+  local prompt="${2:-Select worktree:}"
+  local worktree_root=$(get_worktree_root)
+
+  # Build list with status indicators
+  local worktrees=()
+  local worktrees_plain=() # For select menu without color codes
+  local paths=()
+
+  while IFS= read -r line; do
+    local path=$(echo "$line" | awk '{print $1}')
+
+    # Skip the .bare directory itself
+    if [[ "$path" == "$bare_repo" ]] || [[ "$path" == *"/.bare" ]]; then
+      continue
+    fi
+
+    local branch=$(echo "$line" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+    [[ -z "$branch" ]] && branch="detached"
+
+    local name=$(basename "$path")
+    local status=$(get_container_status "$path")
+    local icon=""
+    local plain_icon=""
+
+    case $status in
+    running)
+      icon="${GREEN}●${NC}"
+      plain_icon="●"
+      ;;
+    stopped)
+      icon="${YELLOW}●${NC}"
+      plain_icon="●"
+      ;;
+    none)
+      icon="${RED}○${NC}"
+      plain_icon="○"
+      ;;
+    esac
+
+    worktrees+=("$icon $name ($branch)")
+    worktrees_plain+=("$plain_icon $name ($branch)")
+    paths+=("$path")
+  done < <(git --git-dir="$bare_repo" worktree list)
+
+  if [[ ${#worktrees[@]} -eq 0 ]]; then
+    error "No worktrees found"
+    return 1
+  fi
+
+  # Single worktree - auto select
+  if [[ ${#worktrees[@]} -eq 1 ]]; then
+    echo "${paths[0]}"
+    return 0
+  fi
+
+  # Interactive selection
+  local selected_idx=-1
+  if command -v fzf &>/dev/null; then
+    local selected=$(printf '%s\n' "${worktrees[@]}" |
+      fzf --ansi --prompt="$prompt " --height=40% --reverse)
+
+    for i in "${!worktrees[@]}"; do
+      if [[ "${worktrees[$i]}" == "$selected" ]]; then
+        selected_idx=$i
+        break
+      fi
+    done
+  else
+    echo "$prompt" >&2
+    select item in "${worktrees_plain[@]}"; do
+      for i in "${!worktrees_plain[@]}"; do
+        if [[ "${worktrees_plain[$i]}" == "$item" ]]; then
+          selected_idx=$i
+          break 2
+        fi
+      done
+    done
+  fi
+
+  if [[ $selected_idx -ge 0 ]]; then
+    echo "${paths[$selected_idx]}"
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Resolve target worktree - determines which worktree to operate on
+# Returns: Prints workspace_folder to stdout
+# Side effect: Sets global RESOLVED_ARGS array with remaining arguments
+resolve_target_worktree() {
+  local bare_repo=$(find_bare_repo)
+
+  # Not in worktree project - use current dir (backward compat)
+  if [[ -z "$bare_repo" ]]; then
+    echo "$(pwd)"
+    return 0
+  fi
+
+  local worktree_root=$(get_worktree_root)
+  local first_arg="$1"
+
+  # Check if first arg is a worktree name (not a flag)
+  if [[ -n "$first_arg" ]] && [[ ! "$first_arg" =~ ^- ]]; then
+    local candidate="$worktree_root/$first_arg"
+    if is_git_worktree "$candidate"; then
+      shift # Remove worktree arg from $@
+      RESOLVED_ARGS=("$@")
+      echo "$candidate"
+      return 0
+    fi
+  fi
+
+  # Auto-detect from current directory
+  local current_dir=$(pwd)
+  if [[ "$current_dir" == "$worktree_root"/* ]] && [[ "$current_dir" != "$worktree_root" ]]; then
+    # Inside a worktree subdirectory - find which worktree
+    while IFS= read -r line; do
+      local wt_path=$(echo "$line" | awk '{print $1}')
+      if [[ "$current_dir" == "$wt_path"* ]]; then
+        RESOLVED_ARGS=("$@")
+        echo "$wt_path"
+        return 0
+      fi
+    done < <(git --git-dir="$bare_repo" worktree list)
+  fi
+
+  # At project root or in .bare - interactive selection
+  local selected=$(select_worktree "$bare_repo" "Select worktree for operation:")
+  if [[ -z "$selected" ]]; then
+    error "No worktree selected"
+    return 1
+  fi
+
+  RESOLVED_ARGS=("$@")
+  echo "$selected"
+}
+
+# Show main help
+show_help() {
+  cat <<EOF
+dv - Devcontainer management tool
+
+Usage:
+  dv <command> [options]
+
+Commands:
+  up [worktree] [--dotfile]        Bring up devcontainer
+  go [worktree] [--shell]          Enter container and run dev command
+  down [worktree]                  Stop and remove devcontainer
+  exec [worktree] -- <command>     Execute arbitrary command in container
+  template <worktree> <image>      Apply devcontainer template
+
+  clone <url> [name]               Clone repository as bare repo
+  worktree <subcommand>            Manage git worktrees
+    add <branch>                   Create new worktree and start devcontainer
+    list                           List all worktrees with container status
+    remove <branch>                Remove worktree and its devcontainer
+  status [worktree]                Show worktree and container status
+
+  help                             Show this help message
+
+Basic Examples:
+  dv up                      # Start (auto-detect or prompt)
+  dv up main                 # Start main worktree
+  dv go feature-123          # Enter feature-123 worktree
+  dv exec main -- npm test   # Run command in main worktree
+  dv down                    # Stop (auto-detect or prompt)
+
+Template Examples:
+  dv template main node      # Use Node.js image in main worktree
+  dv template main python    # Use Python image in main worktree
+  dv template feat node      # Use Node.js image in feat worktree
+
+Worktree Examples:
+  dv clone git@github.com:user/repo.git
+  dv worktree add feature-branch
+  dv up feature-branch
+  dv status feature-branch
+
+Environment Variables:
+  ANTHROPIC_API_KEY   API key for Anthropic
+  OPENAI_API_KEY      API key for OpenAI
+  PREFER_OPENCODE     Use OpenCode as AI Agent (default: false)
+  GIT_USER_NAME       Git author name
+  GIT_USER_EMAIL      Git author email
+  DOTFILES_DIR        Path to local dotfiles (default: ~/github/devpod-dotfile)
+  DOTFILES_REPO       External dotfiles repo (default: https://github.com/PercyODI/devpod-dotfile)
+
+EOF
+}
+
+# Subcommand: up
+cmd_up() {
+  # Check for help flag first
+  for arg in "$@"; do
+    if [[ "$arg" == "--help" ]] || [[ "$arg" == "-h" ]]; then
+      cat <<EOF
+Usage: dv up [worktree] [--dotfile]
+
+Bring up the devcontainer. By default, uses local dotfiles mounted from
+your host machine. Use --dotfile to fetch from external GitHub repository.
+
+Arguments:
+  worktree         Optional: Name of worktree (auto-detect if not specified)
+
+Options:
+  --dotfile, -d    Use external dotfiles from GitHub repository instead of local
+
+Examples:
+  dv up                # Auto-detect or prompt
+  dv up main           # Start main worktree
+  dv up --dotfile      # Start with external GitHub dotfiles (auto-detect worktree)
+  dv up main --dotfile # Start main worktree with external dotfiles
+
+Environment Variables:
+  DOTFILES_DIR     Local dotfiles path (default: ~/github/devpod-dotfile)
+  DOTFILES_REPO    External repo (default: https://github.com/PercyODI/devpod-dotfile)
+
+EOF
+      return 0
+    fi
+  done
+
+  # Resolve target worktree
+  local workspace_folder=$(resolve_target_worktree "$@")
+  if [[ $? -ne 0 ]]; then
+    return 1
+  fi
+
+  # Parse flags from resolved args
+  local use_dotfile_repo=false
+  set -- "${RESOLVED_ARGS[@]}"
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+    --dotfile | -d)
+      use_dotfile_repo=true
+      shift
+      ;;
+    *)
+      error "Unknown option: $1"
+      echo "Run 'dv up --help' for usage."
+      return 1
+      ;;
+    esac
+  done
+
+  echo "Starting devcontainer in: $(basename "$workspace_folder")"
+
+  get_remote_env_args
+
+  if [ "$use_dotfile_repo" = true ]; then
+    devcontainer up \
+      --workspace-folder "$workspace_folder" \
+      --dotfiles-repository ${DOTFILES_REPO:-https://github.com/PercyODI/devpod-dotfile} \
+      --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
+      --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts,readonly \
+      --mount-git-worktree-common-dir \
+      "${REMOTE_ENV_ARGS[@]}" \
+      --update-remote-user-uid-default on \
+      --remove-existing-container
+
+    success "Devcontainer started with external dotfiles"
+  else
+    devcontainer up \
+      --workspace-folder "$workspace_folder" \
+      --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
+      --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts \
+      --mount type=bind,source=${DOTFILES_DIR:-${HOME}/github/devpod-dotfile},target=/dotfiles \
+      --mount-git-worktree-common-dir \
+      --update-remote-user-uid-default on \
+      --remove-existing-container
+
+    echo "Running local dotfiles installation..."
+    devcontainer exec \
+      --workspace-folder "$workspace_folder" \
+      "${REMOTE_ENV_ARGS[@]}" \
+      -- bash -c 'cd /dotfiles && ./install.sh'
+
+    success "Devcontainer started with local dotfiles"
+  fi
+}
+
+# Subcommand: go
+cmd_go() {
+  # Check for help flag first
+  for arg in "$@"; do
+    if [[ "$arg" == "--help" ]] || [[ "$arg" == "-h" ]]; then
+      cat <<EOF
+Usage: dv go [worktree] [--shell]
+
+Enter the container and run the dev command, or open an interactive shell.
+
+Arguments:
+  worktree       Optional: Name of worktree (auto-detect if not specified)
+
+Options:
+  --shell, -s    Open interactive shell instead of running dev command
+
+Examples:
+  dv go                # Auto-detect or prompt
+  dv go main           # Enter main worktree
+  dv go feature-123    # Enter feature-123 worktree
+  dv go --shell        # Open interactive shell (auto-detect worktree)
+
+EOF
+      return 0
+    fi
+  done
+
+  # Resolve target worktree
+  local workspace_folder=$(resolve_target_worktree "$@")
+  if [[ $? -ne 0 ]]; then
+    return 1
+  fi
+
+  # Parse flags from resolved args
+  local use_shell=false
+  set -- "${RESOLVED_ARGS[@]}"
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+    --shell | -s)
+      use_shell=true
+      shift
+      ;;
+    *)
+      error "Unknown option: $1"
+      echo "Run 'dv go --help' for usage."
+      return 1
+      ;;
+    esac
+  done
+
+  get_remote_env_args
+
+  if [ "$use_shell" = true ]; then
+    devcontainer exec \
+      --workspace-folder "$workspace_folder" \
+      "${REMOTE_ENV_ARGS[@]}" \
+      zsh
+  else
+    devcontainer exec \
+      --workspace-folder "$workspace_folder" \
+      "${REMOTE_ENV_ARGS[@]}" \
+      zsh -ic dev
+  fi
+}
+
+# Subcommand: down
+cmd_down() {
+  # Check for help flag first
+  if [[ $1 == "--help" || $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv down [worktree]
+
+Stop and remove the devcontainer.
+
+Arguments:
+  worktree    Optional: Name of worktree (auto-detect if not specified)
+
+Examples:
+  dv down              # Auto-detect or prompt
+  dv down main         # Stop main worktree
+  dv down feature-123  # Stop feature-123 worktree
+
+EOF
+    return 0
+  fi
+
+  # Resolve target worktree
+  local workspace_folder=$(resolve_target_worktree "$@")
+  if [[ $? -ne 0 ]]; then
+    return 1
+  fi
+
+  # Find container for workspace
+  local container_id=$(docker ps -aq \
+    --filter "label=devcontainer.local_folder=${workspace_folder}")
+
+  if [ -z "$container_id" ]; then
+    warning "No devcontainer found for workspace: ${workspace_folder}"
+    return 0
+  fi
+
+  echo "Stopping and removing container for: $(basename "$workspace_folder")"
+  docker stop "$container_id"
+  docker rm "$container_id"
+  success "Devcontainer removed successfully"
+}
+
+# Subcommand: exec
+cmd_exec() {
+  # Special handling for help or no args
+  if [[ $# -eq 0 ]] || [[ $1 == "--help" ]] || [[ $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv exec [worktree] -- <command> [args...]
+
+Execute an arbitrary command in the devcontainer.
+
+Arguments:
+  worktree    Optional: Name of worktree (auto-detect if not specified)
+  --          Required separator before command
+  command     Command to execute
+
+Examples:
+  dv exec -- ls -la                   # Auto-detect worktree
+  dv exec main -- ls -la              # Run in main worktree
+  dv exec feature-123 -- npm install  # Run in feature-123
+  dv exec -- bash -c "echo \$HOME"    # Run complex command
+
+EOF
+    return 0
+  fi
+
+  # Resolve target worktree
+  local workspace_folder=$(resolve_target_worktree "$@")
+  if [[ $? -ne 0 ]]; then
+    return 1
+  fi
+
+  # Remaining args are the command
+  set -- "${RESOLVED_ARGS[@]}"
+
+  # Require -- separator
+  if [[ $1 != "--" ]]; then
+    error "Missing required '--' separator before command"
+    echo "Usage: dv exec [worktree] -- <command> [args...]"
+    echo "Run 'dv exec --help' for more information."
+    return 1
+  fi
+  shift
+
+  if [[ $# -eq 0 ]]; then
+    error "No command specified after '--'"
+    echo "Usage: dv exec [worktree] -- <command> [args...]"
+    echo "Run 'dv exec --help' for more information."
+    return 1
+  fi
+
+  get_remote_env_args
+
+  devcontainer exec \
+    --workspace-folder "$workspace_folder" \
+    "${REMOTE_ENV_ARGS[@]}" \
+    "$@"
+}
+
+# Managed container images
+declare -A CONTAINER_IMAGES=(
+  ["node22"]="mcr.microsoft.com/devcontainers/typescript-node:22-bookworm"
+  ["node"]="mcr.microsoft.com/devcontainers/typescript-node:24-trixie"
+  ["python"]="mcr.microsoft.com/devcontainers/python:1-3.12-bookworm"
+  ["java"]="mcr.microsoft.com/devcontainers/java:1-21-bookworm"
+  ["universal"]="mcr.microsoft.com/devcontainers/universal:2-linux"
+  ["base"]="mcr.microsoft.com/devcontainers/base:1-bookworm"
+)
+
+# Subcommand: template
+cmd_template() {
+  # Check for help flag first
+  if [[ $# -eq 0 ]] || [[ $1 == "--help" ]] || [[ $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv template <worktree> <image-name>
+
+Create a .devcontainer/devcontainer.json file with a managed container image.
+
+Arguments:
+  worktree       Name of worktree (required)
+  image-name     Image preset name (required)
+
+Available images:
+$(for key in "${!CONTAINER_IMAGES[@]}"; do echo "  - $key"; done | sort)
+
+Examples:
+  dv template main node        # Use Node.js image in main worktree
+  dv template main python      # Use Python image in main worktree
+  dv template feature-123 node # Use Node.js image in feature-123 worktree
+
+EOF
+    return 0
+  fi
+
+  # Require both arguments
+  if [[ $# -ne 2 ]]; then
+    error "Both worktree and image-name are required"
+    echo "Usage: dv template <worktree> <image-name>"
+    echo "Run 'dv template --help' for usage."
+    return 1
+  fi
+
+  local worktree_name="$1"
+  local image_name="$2"
+
+  # Find bare repo
+  local bare_repo=$(find_bare_repo)
+  if [[ -z "$bare_repo" ]]; then
+    error "Not in a worktree-enabled project (no .bare directory found)"
+    return 1
+  fi
+
+  # Resolve worktree path
+  local worktree_root=$(get_worktree_root)
+  local workspace_folder="$worktree_root/$worktree_name"
+
+  if ! is_git_worktree "$workspace_folder"; then
+    error "Worktree not found: $worktree_name"
+    return 1
+  fi
+
+  # Get project name from workspace folder or git repo
+  local project_name=$(basename "$workspace_folder")
+  if git -C "$workspace_folder" rev-parse --git-dir >/dev/null 2>&1; then
+    local repo_name=$(basename "$(git -C "$workspace_folder" rev-parse --show-toplevel)")
+    if [[ -n "$repo_name" ]]; then
+      project_name="$repo_name"
+    fi
+  fi
+
+  # Validate image name
+  if [[ -z "${CONTAINER_IMAGES[$image_name]}" ]]; then
+    error "Unknown image: $image_name"
+    echo "Run 'dv template --help' to see available images."
+    return 1
+  fi
+
+  local selected_image="${CONTAINER_IMAGES[$image_name]}"
+
+  # Check if .devcontainer already exists
+  if [[ -f "$workspace_folder/.devcontainer/devcontainer.json" ]]; then
+    warning "Warning: .devcontainer/devcontainer.json already exists"
+    read -p "Overwrite? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      echo "Cancelled"
+      return 0
+    fi
+  fi
+
+  # Create .devcontainer directory
+  mkdir -p "$workspace_folder/.devcontainer"
+
+  # Generate devcontainer.json
+  cat >"$workspace_folder/.devcontainer/devcontainer.json" <<EOF
+{
+  "name": "${project_name}",
+  "image": "${selected_image}"
+}
+EOF
+
+  success "Created .devcontainer/devcontainer.json"
+  echo "  Location: $workspace_folder/.devcontainer/devcontainer.json"
+  echo ""
+  echo "Configuration:"
+  echo "  Name:  ${project_name}"
+  echo "  Image: ${selected_image}"
+  echo ""
+  echo "Next steps:"
+  echo "  1. Review and customize .devcontainer/devcontainer.json as needed"
+  echo "  2. Run 'dv up' to start the devcontainer"
+}
+
+# Subcommand: clone
+cmd_clone() {
+  if [[ $1 == "--help" || $1 == "-h" || $# -eq 0 ]]; then
+    cat <<EOF
+Usage: dv clone <url> [name]
+
+Clone a git repository as a bare repo and set up worktree structure.
+
+This creates:
+  project-name/
+    .bare/          # Bare git repository
+    main/           # Default branch worktree (with devcontainer)
+
+After cloning, it automatically creates a worktree for the default branch
+and starts the devcontainer.
+
+Arguments:
+  url              Git repository URL
+  name             Optional: project directory name (default: derived from URL)
+
+Examples:
+  dv clone git@github.com:user/repo.git
+  dv clone https://github.com/user/repo.git my-project
+
+EOF
+    return 0
+  fi
+
+  local repo_url="$1"
+  local project_name="$2"
+
+  if [[ -z "$repo_url" ]]; then
+    error "Repository URL is required"
+    echo "Run 'dv clone --help' for usage."
+    return 1
+  fi
+
+  # Derive project name from URL if not provided
+  if [[ -z "$project_name" ]]; then
+    project_name=$(basename "$repo_url" .git)
+  fi
+
+  echo "Cloning $repo_url as bare repository..."
+
+  # Create project directory and bare repo
+  mkdir -p "$project_name"
+  git clone --bare "$repo_url" "$project_name/.bare"
+
+  # Configure bare repo
+  cd "$project_name"
+  echo "gitdir: ./.bare" >.git
+
+  # Get default branch
+  local default_branch=$(git --git-dir=.bare symbolic-ref --short HEAD 2>/dev/null || echo "main")
+
+  success "Bare repository created at $project_name/.bare"
+  echo "Creating worktree for branch: $default_branch"
+
+  # Create worktree for default branch with relative paths
+  git worktree add --relative-paths "$default_branch" "$default_branch"
+
+  # Start devcontainer in the worktree
+  cd "$default_branch"
+  echo "Starting devcontainer in $default_branch worktree..."
+  cmd_up
+
+  success "Project setup complete!"
+  echo ""
+  echo "To create additional worktrees, run:"
+  echo "  cd $project_name/$default_branch"
+  echo "  dv worktree add <branch-name>"
+}
+
+# Subcommand: worktree
+cmd_worktree() {
+  if [[ $# -eq 0 || $1 == "--help" || $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv worktree <subcommand> [args...]
+
+Manage git worktrees and their devcontainers.
+
+Subcommands:
+  add <branch>       Create new worktree and start devcontainer
+  list               List all worktrees with container status
+  remove <branch>    Remove worktree and its devcontainer
+
+Examples:
+  dv worktree add feature-123
+  dv worktree list
+  dv worktree remove feature-123
+
+Run 'dv worktree <subcommand> --help' for more information on each subcommand.
+
+EOF
+    return 0
+  fi
+
+  local subcommand=$1
+  shift
+
+  case $subcommand in
+  add)
+    cmd_worktree_add "$@"
+    ;;
+  list | ls)
+    cmd_worktree_list "$@"
+    ;;
+  remove | rm)
+    cmd_worktree_remove "$@"
+    ;;
+  *)
+    error "Unknown worktree subcommand: $subcommand"
+    echo "Run 'dv worktree --help' for usage."
+    return 1
+    ;;
+  esac
+}
+
+# Subcommand: worktree add
+cmd_worktree_add() {
+  if [[ $1 == "--help" || $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv worktree add <branch>
+
+Create a new git worktree for the specified branch and start its devcontainer.
+
+If the branch doesn't exist locally, you'll be prompted to select from available
+remote branches.
+
+Arguments:
+  branch           Branch name to create worktree for (optional with interactive mode)
+
+Options:
+  --no-start       Don't automatically start devcontainer
+
+Examples:
+  dv worktree add feature-123
+  dv worktree add                    # Interactive branch selection
+
+EOF
+    return 0
+  fi
+
+  # Find bare repo
+  local bare_repo=$(find_bare_repo)
+  if [[ -z "$bare_repo" ]]; then
+    error "Not in a worktree-enabled project (no .bare directory found)"
+    echo "Run 'dv clone <url>' to set up a new project."
+    return 1
+  fi
+
+  local worktree_root=$(get_worktree_root)
+  local branch="$1"
+  local auto_start=true
+
+  # Check for --no-start flag
+  if [[ "$2" == "--no-start" ]] || [[ "$1" == "--no-start" ]]; then
+    auto_start=false
+    if [[ "$1" == "--no-start" ]]; then
+      branch=""
+    fi
+  fi
+
+  # Interactive branch selection if no branch specified
+  if [[ -z "$branch" ]]; then
+    branch=$(select_branch "$bare_repo" "Select branch for new worktree:")
+    if [[ -z "$branch" ]]; then
+      error "No branch selected"
+      return 1
+    fi
+  fi
+
+  # Check if worktree already exists
+  if [[ -d "$worktree_root/$branch" ]]; then
+    error "Worktree already exists for branch: $branch"
+    return 1
+  fi
+
+  echo "Creating worktree for branch: $branch"
+
+  # Check if branch exists locally
+  if ! git --git-dir="$bare_repo" show-ref --verify --quiet "refs/heads/$branch"; then
+    # Try to fetch from remote
+    if git --git-dir="$bare_repo" show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+      echo "Branch found on remote, creating local tracking branch..."
+      git --git-dir="$bare_repo" worktree add --relative-paths "$worktree_root/$branch" -b "$branch" "origin/$branch"
+    else
+      warning "Branch not found locally or on remote, creating new branch..."
+      git --git-dir="$bare_repo" worktree add --relative-paths "$worktree_root/$branch" -b "$branch"
+    fi
+  else
+    git --git-dir="$bare_repo" worktree add --relative-paths "$worktree_root/$branch" "$branch"
+  fi
+
+  success "Worktree created at: $worktree_root/$branch"
+
+  # Start devcontainer if requested
+  if [[ "$auto_start" == true ]]; then
+    echo "Starting devcontainer..."
+    cd "$worktree_root/$branch"
+    cmd_up
+  else
+    echo ""
+    echo "To start the devcontainer, run:"
+    echo "  cd $worktree_root/$branch"
+    echo "  dv up"
+  fi
+}
+
+# Subcommand: worktree list
+cmd_worktree_list() {
+  if [[ $1 == "--help" || $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv worktree list
+
+List all git worktrees with their devcontainer status.
+
+Shows:
+  - Worktree path
+  - Branch name
+  - Container status (running/stopped/none)
+
+EOF
+    return 0
+  fi
+
+  # Find bare repo
+  local bare_repo=$(find_bare_repo)
+  if [[ -z "$bare_repo" ]]; then
+    error "Not in a worktree-enabled project (no .bare directory found)"
+    return 1
+  fi
+
+  local worktree_root=$(get_worktree_root)
+
+  echo "Worktrees in $worktree_root:"
+  echo ""
+
+  # Parse git worktree list output
+  while IFS= read -r line; do
+    local path=$(echo "$line" | awk '{print $1}')
+    local branch=$(echo "$line" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+    [[ -z "$branch" ]] && branch="unknown"
+
+    # Get container status
+    local status=$(get_container_status "$path")
+
+    # Format status with color
+    local status_display=""
+    case $status in
+    running)
+      status_display="${GREEN}●${NC} running"
+      ;;
+    stopped)
+      status_display="${YELLOW}●${NC} stopped"
+      ;;
+    none)
+      status_display="${RED}○${NC} no container"
+      ;;
+    esac
+
+    echo -e "  $(basename "$path")"
+    echo -e "    Branch:    $branch"
+    echo -e "    Status:    $status_display"
+    echo -e "    Path:      $path"
+    echo ""
+  done < <(git --git-dir="$bare_repo" worktree list)
+}
+
+# Subcommand: worktree remove
+cmd_worktree_remove() {
+  if [[ $1 == "--help" || $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv worktree remove <branch>
+
+Remove a git worktree and its devcontainer.
+
+This will:
+  1. Stop and remove the devcontainer (if exists)
+  2. Remove the worktree directory
+  3. Prune the git worktree
+
+Arguments:
+  branch           Branch name of worktree to remove (optional with interactive mode)
+
+Examples:
+  dv worktree remove feature-123
+  dv worktree remove                 # Interactive selection
+
+EOF
+    return 0
+  fi
+
+  # Find bare repo
+  local bare_repo=$(find_bare_repo)
+  if [[ -z "$bare_repo" ]]; then
+    error "Not in a worktree-enabled project (no .bare directory found)"
+    return 1
+  fi
+
+  local worktree_root=$(get_worktree_root)
+  local branch="$1"
+
+  # Interactive branch selection if no branch specified
+  if [[ -z "$branch" ]]; then
+    # Get list of worktree directories
+    local worktrees=$(git --git-dir="$bare_repo" worktree list |
+      awk 'NR>1 {print $1}' |
+      xargs -I{} basename {})
+
+    if command -v fzf &>/dev/null; then
+      branch=$(echo "$worktrees" | fzf --prompt="Select worktree to remove: " --height=40% --reverse)
+    else
+      echo "Select worktree to remove:" >&2
+      select branch in $worktrees; do
+        if [[ -n "$branch" ]]; then
+          break
+        fi
+      done
+    fi
+
+    if [[ -z "$branch" ]]; then
+      error "No worktree selected"
+      return 1
+    fi
+  fi
+
+  local worktree_path="$worktree_root/$branch"
+
+  if [[ ! -d "$worktree_path" ]]; then
+    error "Worktree not found: $worktree_path"
+    return 1
+  fi
+
+  echo "Removing worktree: $branch"
+
+  # Check if container exists and stop it
+  local container_id=$(docker ps -aq \
+    --filter "label=devcontainer.local_folder=${worktree_path}")
+
+  if [[ -n "$container_id" ]]; then
+    echo "Stopping and removing devcontainer..."
+    docker stop "$container_id" >/dev/null 2>&1
+    docker rm "$container_id" >/dev/null 2>&1
+    success "Devcontainer removed"
+  fi
+
+  # Remove worktree
+  echo "Removing worktree directory..."
+  git --git-dir="$bare_repo" worktree remove "$worktree_path" --force
+
+  success "Worktree removed: $branch"
+}
+
+# Subcommand: status
+cmd_status() {
+  if [[ $1 == "--help" || $1 == "-h" ]]; then
+    cat <<EOF
+Usage: dv status [worktree]
+
+Show worktree and devcontainer status.
+
+Arguments:
+  worktree    Optional: Specific worktree to show (shows current if not specified)
+
+Examples:
+  dv status              # Show current worktree + list others
+  dv status main         # Show status of main worktree only
+  dv status feature-123  # Show status of feature-123 worktree
+
+EOF
+    return 0
+  fi
+
+  local bare_repo=$(find_bare_repo)
+  if [[ -z "$bare_repo" ]]; then
+    echo "Not in a worktree-enabled project"
+    echo ""
+    echo "Run 'dv clone <url>' to set up a new project with worktrees."
+    return 0
+  fi
+
+  local worktree_root=$(get_worktree_root)
+  local target_worktree="$1"
+
+  # If specific worktree requested
+  if [[ -n "$target_worktree" ]]; then
+    local target_path="$worktree_root/$target_worktree"
+    if ! is_git_worktree "$target_path"; then
+      error "Worktree not found: $target_worktree"
+      return 1
+    fi
+
+    local branch=$(git -C "$target_path" branch --show-current 2>/dev/null || echo "unknown")
+    local container_status=$(get_container_status "$target_path")
+    local status_display=""
+
+    case $container_status in
+    running) status_display="${GREEN}running${NC}" ;;
+    stopped) status_display="${YELLOW}stopped${NC}" ;;
+    none) status_display="${RED}no container${NC}" ;;
+    esac
+
+    echo "Worktree: $target_worktree"
+    echo "  Path:      $target_path"
+    echo -e "  Branch:    $branch"
+    echo -e "  Container: $status_display"
+    return 0
+  fi
+
+  # Show current worktree + list others (existing behavior)
+  local current_dir=$(pwd)
+  local current_branch="unknown"
+
+  if is_worktree; then
+    current_branch=$(git branch --show-current 2>/dev/null || echo "unknown")
+  fi
+
+  local container_status=$(get_container_status "$current_dir")
+  local status_display=""
+
+  case $container_status in
+  running) status_display="${GREEN}running${NC}" ;;
+  stopped) status_display="${YELLOW}stopped${NC}" ;;
+  none) status_display="${RED}no container${NC}" ;;
+  esac
+
+  echo "Current Worktree:"
+  echo "  Path:      $current_dir"
+  echo -e "  Branch:    $current_branch"
+  echo -e "  Container: $status_display"
+  echo ""
+
+  # List other worktrees
+  local worktree_count=$(git --git-dir="$bare_repo" worktree list | wc -l)
+  if [[ $worktree_count -gt 1 ]]; then
+    echo "Other Worktrees:"
+    while IFS= read -r line; do
+      local path=$(echo "$line" | awk '{print $1}')
+      if [[ "$path" != "$current_dir" ]]; then
+        local name=$(basename "$path")
+        local branch=$(echo "$line" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+        [[ -z "$branch" ]] && branch="unknown"
+        local status=$(get_container_status "$path")
+        local status_icon=""
+
+        case $status in
+        running) status_icon="${GREEN}●${NC}" ;;
+        stopped) status_icon="${YELLOW}●${NC}" ;;
+        none) status_icon="${RED}○${NC}" ;;
+        esac
+
+        echo -e "  $status_icon $name ($branch)"
+      fi
+    done < <(git --git-dir="$bare_repo" worktree list)
+  fi
+}
+
+# Main command router
+main() {
+  if [[ $# -eq 0 ]]; then
+    show_help
+    return 1
+  fi
+
+  local subcommand=$1
+  shift
+
+  case $subcommand in
+  up)
+    cmd_up "$@"
+    ;;
+  go)
+    cmd_go "$@"
+    ;;
+  down)
+    cmd_down "$@"
+    ;;
+  exec)
+    cmd_exec "$@"
+    ;;
+  template)
+    cmd_template "$@"
+    ;;
+  clone)
+    cmd_clone "$@"
+    ;;
+  worktree | wt)
+    cmd_worktree "$@"
+    ;;
+  status | st)
+    cmd_status "$@"
+    ;;
+  help | --help | -h)
+    show_help
+    ;;
+  *)
+    error "Unknown command: $subcommand"
+    echo ""
+    show_help
+    return 1
+    ;;
+  esac
+}
+
+main "$@"
