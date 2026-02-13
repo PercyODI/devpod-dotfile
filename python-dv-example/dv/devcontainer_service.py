@@ -41,7 +41,6 @@ class DevcontainerService:
             "type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent",
             "--mount",
             f"type=bind,source={Path.home()}/.ssh/known_hosts,target=/ssh/known_hosts",
-            "--mount-git-worktree-common-dir",
             "--update-remote-user-uid-default",
             "on",
             "--remove-existing-container",

@@ -1,4 +1,4 @@
-"""Repository and worktree workflow service layer."""
+"""Repository and branch workflow service layer."""
 
 import subprocess
 from dataclasses import dataclass
@@ -7,7 +7,7 @@ from typing import Optional
 
 from .config import Config
 from .devcontainer_service import DevcontainerService
-from .workspace import Workspace
+from .project import Project
 
 
 @dataclass
@@ -15,22 +15,21 @@ class CloneResult:
     """Result of cloning a repository."""
 
     project_dir: Path
-    bare_repo: Path
+    primary_branch_path: Path
     default_branch: str
-    worktree_path: Path
 
 
 @dataclass
-class WorktreeAddResult:
-    """Result of adding a worktree."""
+class BranchAddResult:
+    """Result of adding a branch directory."""
 
-    worktree_path: Path
+    branch_path: Path
     branch: str
     was_created: bool
 
 
 class RepositoryService:
-    """Service for repository and worktree workflow operations."""
+    """Service for repository and branch workflow operations."""
 
     def __init__(self, config: Config):
         """Initialize service with configuration.
@@ -41,8 +40,60 @@ class RepositoryService:
         self.config = config
         self.devcontainer_service = DevcontainerService(config)
 
-    def clone_as_bare(self, url: str, name: Optional[str] = None) -> CloneResult:
-        """Clone repository as bare repo with worktree structure.
+    def _derive_project_name(self, url: str) -> str:
+        """Extract project name from git URL.
+
+        Args:
+            url: Git repository URL
+
+        Returns:
+            Project name (basename without .git)
+        """
+        # Handle various URL formats
+        # git@github.com:user/repo.git -> repo
+        # https://github.com/user/repo.git -> repo
+        # https://github.com/user/repo -> repo
+        path = url.rstrip("/")
+        if path.endswith(".git"):
+            path = path[:-4]
+        return Path(path).name
+
+    def _get_default_branch(self, url: str) -> str:
+        """Use git ls-remote to detect default branch before cloning.
+
+        Args:
+            url: Git repository URL
+
+        Returns:
+            Default branch name
+
+        Raises:
+            subprocess.CalledProcessError: If git command fails
+        """
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", "--symref", url, "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            # Parse output like: "ref: refs/heads/main	HEAD"
+            for line in result.stdout.split("\n"):
+                if line.startswith("ref:"):
+                    # Extract branch name from refs/heads/branch
+                    ref = line.split()[1]
+                    if ref.startswith("refs/heads/"):
+                        return ref.replace("refs/heads/", "")
+
+        except subprocess.CalledProcessError:
+            pass
+
+        # Fallback to main
+        return "main"
+
+    def clone_as_regular(self, url: str, name: Optional[str] = None) -> CloneResult:
+        """Clone repository as regular git clone with branch directory structure.
 
         Args:
             url: Git repository URL
@@ -56,103 +107,82 @@ class RepositoryService:
         """
         # Derive project name from URL if not provided
         if not name:
-            name = Path(url).stem
+            name = self._derive_project_name(url)
 
         project_dir = Path.cwd() / name
-        bare_repo = project_dir / ".bare"
 
-        # Create project directory and clone as bare
+        # Detect default branch
+        default_branch = self._get_default_branch(url)
+
+        # Create parent directory
         project_dir.mkdir(parents=True, exist_ok=True)
+
+        # Clone into subdirectory named after default branch
+        branch_dir = project_dir / default_branch
         subprocess.run(
-            ["git", "clone", "--bare", url, str(bare_repo)],
+            ["git", "clone", url, str(branch_dir)],
             check=True,
         )
-
-        # Create .git file pointing to .bare
-        (project_dir / ".git").write_text("gitdir: ./.bare\n")
-
-        # Get default branch
-        result = subprocess.run(
-            ["git", "--git-dir", str(bare_repo), "symbolic-ref", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        default_branch = result.stdout.strip() or "main"
-
-        # Create worktree for default branch
-        subprocess.run(
-            [
-                "git",
-                "worktree",
-                "add",
-                "--relative-paths",
-                default_branch,
-                default_branch,
-            ],
-            cwd=project_dir,
-            check=True,
-        )
-
-        worktree_path = project_dir / default_branch
 
         return CloneResult(
             project_dir=project_dir,
-            bare_repo=bare_repo,
+            primary_branch_path=branch_dir,
             default_branch=default_branch,
-            worktree_path=worktree_path,
         )
 
-    def add_worktree_with_container(
+    def add_branch_with_container(
         self,
-        workspace: Workspace,
+        project: Project,
         branch: str,
         start_container: bool = True,
         use_external_dotfiles: bool = False,
-    ) -> WorktreeAddResult:
-        """Create worktree and optionally start its container.
+        use_git_clone: bool = False,
+    ) -> BranchAddResult:
+        """Create branch directory and optionally start its container.
 
         Args:
-            workspace: Workspace instance
-            branch: Branch name for the worktree
+            project: Project instance
+            branch: Branch name for the directory
             start_container: Whether to start devcontainer (default: True)
             use_external_dotfiles: Whether to use external dotfiles (default: False)
+            use_git_clone: Whether to use full git clone (default: False, uses local clone)
 
         Returns:
-            WorktreeAddResult with path and branch info
+            BranchAddResult with path and branch info
 
         Raises:
-            RuntimeError: If not in worktree-enabled project
-            ValueError: If worktree already exists
+            RuntimeError: If not in DV project
+            ValueError: If branch directory already exists
             subprocess.CalledProcessError: If git or devcontainer commands fail
         """
-        # Create worktree using workspace method
-        worktree_path = workspace.add_worktree(branch)
+        # Create branch directory using project method
+        branch_path = project.add_branch_directory(branch, use_git_clone)
 
         # Start container if requested
         if start_container:
-            self.devcontainer_service.up(worktree_path, use_external_dotfiles)
+            self.devcontainer_service.up(branch_path, use_external_dotfiles)
 
-        return WorktreeAddResult(
-            worktree_path=worktree_path,
+        return BranchAddResult(
+            branch_path=branch_path,
             branch=branch,
             was_created=True,
         )
 
-    def remove_worktree_with_container(
-        self, workspace: Workspace, name: str
+    def remove_branch_with_container(
+        self, project: Project, name: str, force: bool = False
     ) -> bool:
-        """Remove worktree and its container.
+        """Remove branch directory and its container.
 
         Args:
-            workspace: Workspace instance
-            name: Worktree name to remove
+            project: Project instance
+            name: Branch directory name to remove
+            force: If True, skip confirmation prompts
 
         Returns:
-            True if successful, False otherwise
+            True if successful, False if cancelled
 
         Raises:
-            ValueError: If worktree not found
+            ValueError: If branch directory not found
         """
-        # Delegate to workspace method (it handles container cleanup)
-        return workspace.remove_worktree(name)
+        # Delegate to project method (it handles container cleanup)
+        return project.remove_branch_directory(name, force=force)

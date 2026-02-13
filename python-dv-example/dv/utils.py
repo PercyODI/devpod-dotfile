@@ -10,7 +10,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from .config import Config
-from .workspace import WorktreeInfo
+from .project import BranchInfo
 
 console = Console()
 error_console = Console(stderr=True)
@@ -37,29 +37,29 @@ def run_devcontainer(
         return subprocess.run(cmd, check=check, capture_output=True, text=True)
 
 
-def select_worktree(worktrees: list[WorktreeInfo]) -> Optional[WorktreeInfo]:
-    """Interactive worktree selection using rich."""
-    if not worktrees:
+def select_branch_directory(branch_dirs: list[BranchInfo]) -> Optional[BranchInfo]:
+    """Interactive branch directory selection using rich."""
+    if not branch_dirs:
         return None
 
-    if len(worktrees) == 1:
-        return worktrees[0]
+    if len(branch_dirs) == 1:
+        return branch_dirs[0]
 
     # Check if fzf is available
     if has_fzf():
-        return _select_with_fzf(worktrees)
+        return _select_with_fzf(branch_dirs)
 
     # Fallback to simple numbered selection
-    console.print("\n[bold]Select worktree:[/bold]")
+    console.print("\n[bold]Select branch directory:[/bold]")
     table = Table(show_header=True, header_style="bold magenta")
     table.add_column("#", style="dim", width=3)
     table.add_column("Status", width=8)
     table.add_column("Name", style="cyan")
     table.add_column("Branch", style="green")
 
-    for idx, wt in enumerate(worktrees, 1):
-        status_str = f"[{wt.status.color}]{wt.status.icon}[/{wt.status.color}] {wt.status.value}"
-        table.add_row(str(idx), status_str, wt.name, wt.branch)
+    for idx, bd in enumerate(branch_dirs, 1):
+        status_str = f"[{bd.status.color}]{bd.status.icon}[/{bd.status.color}] {bd.status.value}"
+        table.add_row(str(idx), status_str, bd.name, bd.branch)
 
     console.print(table)
 
@@ -67,9 +67,9 @@ def select_worktree(worktrees: list[WorktreeInfo]) -> Optional[WorktreeInfo]:
         choice = Prompt.ask("Enter number", default="1")
         try:
             idx = int(choice) - 1
-            if 0 <= idx < len(worktrees):
-                return worktrees[idx]
-            console.print(f"[red]Invalid choice. Enter 1-{len(worktrees)}[/red]")
+            if 0 <= idx < len(branch_dirs):
+                return branch_dirs[idx]
+            console.print(f"[red]Invalid choice. Enter 1-{len(branch_dirs)}[/red]")
         except ValueError:
             console.print("[red]Invalid input. Enter a number.[/red]")
 
@@ -103,16 +103,16 @@ def has_fzf() -> bool:
     return subprocess.run(["which", "fzf"], capture_output=True).returncode == 0
 
 
-def _select_with_fzf(worktrees: list[WorktreeInfo]) -> Optional[WorktreeInfo]:
-    """Select worktree using fzf."""
+def _select_with_fzf(branch_dirs: list[BranchInfo]) -> Optional[BranchInfo]:
+    """Select branch directory using fzf."""
     # Format lines for fzf
     lines = []
-    for wt in worktrees:
-        lines.append(f"{wt.status.icon} {wt.name} ({wt.branch})")
+    for bd in branch_dirs:
+        lines.append(f"{bd.status.icon} {bd.name} ({bd.branch})")
 
     try:
         result = subprocess.run(
-            ["fzf", "--ansi", "--prompt=Select worktree: ", "--height=40%", "--reverse"],
+            ["fzf", "--ansi", "--prompt=Select branch directory: ", "--height=40%", "--reverse"],
             input="\n".join(lines),
             capture_output=True,
             text=True,
@@ -120,10 +120,10 @@ def _select_with_fzf(worktrees: list[WorktreeInfo]) -> Optional[WorktreeInfo]:
         )
         selected = result.stdout.strip()
 
-        # Find matching worktree
+        # Find matching branch directory
         for idx, line in enumerate(lines):
             if line == selected:
-                return worktrees[idx]
+                return branch_dirs[idx]
 
     except subprocess.CalledProcessError:
         return None

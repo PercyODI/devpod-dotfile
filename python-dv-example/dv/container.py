@@ -5,6 +5,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from rich.console import Console
+from rich.prompt import Confirm
+
+console = Console()
+
 
 class ContainerStatus(Enum):
     """Container status states."""
@@ -81,11 +86,30 @@ class Container:
         except subprocess.CalledProcessError:
             return None
 
-    def stop(self) -> bool:
-        """Stop and remove the container."""
+    def stop(self, force: bool = False) -> bool:
+        """Stop and remove the container.
+
+        Args:
+            force: If True, skip confirmation prompt
+
+        Returns:
+            True if container was stopped, False if no container or cancelled
+        """
         container_id = self._get_container_id()
         if not container_id:
             return False
+
+        # Show commands and ask for confirmation
+        if not force:
+            console.print(f"\n[bold yellow]⚠️  DESTRUCTIVE ACTION[/bold yellow]")
+            console.print(f"About to execute:")
+            console.print(f"  [dim]$ docker stop {container_id}[/dim]")
+            console.print(f"  [dim]$ docker rm {container_id}[/dim]")
+            console.print(f"  Workspace: [cyan]{self.workspace_path}[/cyan]")
+
+            if not Confirm.ask("Stop and remove this container?", default=True):
+                console.print("[yellow]Operation cancelled[/yellow]")
+                return False
 
         try:
             subprocess.run(["docker", "stop", container_id], check=True, capture_output=True)

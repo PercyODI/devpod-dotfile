@@ -1,6 +1,6 @@
 # dv - Devcontainer Management Tool (Python Edition)
 
-A Python rewrite of the `dv` bash script for managing devcontainers with git worktrees.
+A Python tool for managing devcontainers with git branch directories.
 
 ## Features
 
@@ -11,6 +11,7 @@ A Python rewrite of the `dv` bash script for managing devcontainers with git wor
 - **Extensible**: Easy to add new features or container images
 - **Interactive Selection**: fzf integration with fallback to simple selection
 - **Configuration**: YAML config file support
+- **Simple Mental Model**: Each branch = a directory
 
 ## Installation
 
@@ -40,54 +41,71 @@ After installation, the `dv` command will be available in your terminal.
 
 ## Usage
 
-The CLI interface is identical to the bash version, with some improvements:
+### Project Structure
+
+After cloning with `dv`, your project looks like this:
+
+```
+project-name/           # Parent directory (run dv commands here)
+├── main/               # Regular git clone
+│   └── .git/
+├── feature-123/        # Another branch directory
+│   └── .git/
+└── feature-456/
+    └── .git/
+```
 
 ### Basic Commands
 
 ```bash
-# Start devcontainer (current directory)
-dv up
-
-# Start specific worktree
-dv up main
-
-# Interactive worktree selection
-dv up --select
-
-# Enter container and run dev command
-dv go
-
-# Enter container with shell
-dv go --shell
-
-# Stop devcontainer
-dv down
-
-# Execute arbitrary command
-dv exec -- npm test
-```
-
-### Worktree Management
-
-```bash
-# Clone as bare repo
+# Clone repository
 dv clone git@github.com:user/repo.git
 
-# Add new worktree
-dv worktree add feature-branch
+# Change to project directory
+cd project-name
 
-# Interactive branch selection
-dv worktree add --select
+# Start devcontainer for main branch
+dv up main
 
-# List worktrees with status
-dv worktree list
+# Enter container and run dev command
+dv go main
 
-# Remove worktree
-dv worktree remove feature-branch
-dv worktree remove --select
+# Enter container with shell
+dv go main --shell
+
+# Stop devcontainer
+dv down main
+
+# Execute arbitrary command
+dv exec main -- npm test
+
+# Interactive selection
+dv up --select
+dv go --select
+```
+
+### Branch Directory Management
+
+```bash
+# Add new branch directory (local clone - fast)
+dv branch add feature-branch
+
+# Add with full git clone
+dv branch add feature-branch --clone
+
+# Add without starting container
+dv branch add feature-branch --no-start
+
+# List branch directories with status
+dv branch list
+
+# Remove branch directory
+dv branch remove feature-123
+
+# Interactive selection
+dv branch remove --select
 
 # Show status
-dv status
 dv status main
 ```
 
@@ -125,26 +143,42 @@ images:
 
 Environment variables still work and take precedence over the config file.
 
-## Improvements Over Bash Version
+## Key Design Decisions
 
-### 1. **Simpler Worktree Resolution**
-```bash
-# Explicit - no magic
-dv up main
-
-# Interactive - opt-in with --select
-dv up --select
-
-# Current directory - default
-cd project/main && dv up
+### 1. **Simple Directory Structure**
+```
+project-name/
+├── main/          # Each branch is a separate git clone
+├── feature-1/
+└── feature-2/
 ```
 
-No complex auto-detection with 4 different code paths.
+No special `.bare` repository. Each branch directory is a regular git clone.
 
-### 2. **Structured Data**
+### 2. **Explicit Branch Arguments**
+```bash
+# Always explicit - no magic
+dv up main
+
+# Or interactive selection
+dv up --select
+```
+
+Branch argument is required. Commands must be run from parent directory.
+
+### 3. **Fast Local Clones**
+```bash
+# Default: git clone --local (fast, uses hardlinks)
+dv branch add feature-123
+
+# Optional: full clone from remote
+dv branch add feature-123 --clone
+```
+
+### 4. **Structured Data**
 ```python
 @dataclass
-class WorktreeInfo:
+class BranchInfo:
     path: Path
     branch: str
     status: ContainerStatus
@@ -152,33 +186,17 @@ class WorktreeInfo:
 
 No parallel arrays that can get out of sync.
 
-### 3. **Proper Error Handling**
+### 5. **Proper Error Handling**
 ```python
 try:
-    worktree_path = ws.add_worktree(branch)
-    success(f"Worktree created at: {worktree_path}")
+    branch_path = project.add_branch_directory(branch)
+    success(f"Branch directory created at: {branch_path}")
 except ValueError as e:
     error(str(e))
     sys.exit(1)
 ```
 
-No `set -e` that kills the entire script.
-
-### 4. **Testable**
-```python
-def test_workspace_resolution():
-    ws = Workspace(Path("/test/project"))
-    path = ws.resolve_worktree("main")
-    assert path == Path("/test/project/main")
-```
-
-Easy to write unit tests.
-
-### 5. **Configuration Management**
-YAML config file + environment variables with clear precedence rules.
-
-### 6. **Rich Output**
-Beautiful tables, colors, and status indicators using the `rich` library.
+Granular error handling with helpful messages.
 
 ## Development
 
@@ -186,11 +204,13 @@ Beautiful tables, colors, and status indicators using the `rich` library.
 
 ```
 dv/
-├── cli.py          # Click commands (all user-facing commands)
-├── workspace.py    # Git worktree operations
-├── container.py    # Docker/devcontainer operations
-├── config.py       # Configuration management
-└── utils.py        # Helper functions
+├── cli.py                    # Click commands (all user-facing commands)
+├── project.py                # Project and branch directory operations
+├── container.py              # Docker/devcontainer operations
+├── config.py                 # Configuration management
+├── repository_service.py     # Clone and branch workflows
+├── devcontainer_service.py   # Devcontainer lifecycle
+└── utils.py                  # Helper functions
 ```
 
 ### Running Tests
@@ -212,20 +232,17 @@ mypy dv/
 black dv/
 ```
 
-## Comparison to Bash Version
+## Why This Architecture?
 
-| Aspect | Bash | Python |
-|--------|------|--------|
-| Lines of code | ~1200 | ~800 (more readable) |
-| Error handling | `set -e` (blunt) | Try/except (granular) |
-| Data structures | Parallel arrays | Dataclasses |
-| Testing | Difficult | Easy |
-| Configuration | Env vars only | YAML + env vars |
-| Output | Manual color codes | Rich library |
-| Argument parsing | Manual | Click (auto-generated help) |
-| Worktree resolution | 4 code paths | 1 code path + opt-in |
+### Advantages of Branch Directories
 
-## Why Python?
+1. **Simpler mental model** - Each branch = a directory
+2. **No special git setup** - Just regular clones
+3. **More transparent** - Easy to understand what's happening
+4. **Flexible** - Can manipulate directories directly
+5. **Beginner friendly** - Easy to understand and use
+
+### Why Python?
 
 1. **Better abstractions** - Classes, dataclasses, enums
 2. **Type safety** - Catch bugs before runtime
@@ -234,22 +251,51 @@ black dv/
 5. **Maintainability** - Easier for teams to understand
 6. **Extensibility** - Plugins, custom commands
 
-## Migration from Bash
+## Workflow Examples
 
-The Python version is a drop-in replacement:
+### Starting a new project
 
 ```bash
-# Uninstall bash version (if installed)
-rm ~/.local/bin/dv  # or wherever you installed it
+# Clone repository
+dv clone git@github.com:user/repo.git
 
-# Install Python version
-cd python-dv-example
-pip install --user .
+# Navigate to project
+cd repo
 
-# Use it the same way
-dv up
-dv go
-dv status
+# Start main branch
+dv up main
+
+# Work in container
+dv go main
+```
+
+### Working on multiple features
+
+```bash
+# Add branch directories
+dv branch add feature-auth
+dv branch add feature-ui
+
+# Start both containers
+dv up feature-auth
+dv up feature-ui
+
+# Switch between them
+dv go feature-auth
+dv go feature-ui
+
+# View all branches
+dv branch list
+```
+
+### Cleaning up
+
+```bash
+# Stop container
+dv down feature-auth
+
+# Remove branch directory (also stops container)
+dv branch remove feature-auth
 ```
 
 ## License
