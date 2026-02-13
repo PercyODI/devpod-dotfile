@@ -3,7 +3,7 @@
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from rich.console import Console
 from rich.prompt import Prompt
@@ -11,6 +11,9 @@ from rich.table import Table
 
 from .config import Config
 from .project import BranchInfo
+
+if TYPE_CHECKING:
+    from .project import Project
 
 console = Console()
 error_console = Console(stderr=True)
@@ -159,3 +162,138 @@ def success(message: str) -> None:
 def warning(message: str) -> None:
     """Print warning message."""
     console.print(f"[yellow]Warning:[/yellow] {message}")
+
+
+def select_workspace(workspaces: list[BranchInfo]) -> Optional[BranchInfo]:
+    """Interactive workspace selection using rich (alias for select_branch_directory)."""
+    return select_branch_directory(workspaces)
+
+
+def list_remote_branches(project: "Project") -> list[str]:
+    """List all remote branches for the project.
+
+    Args:
+        project: Project instance
+
+    Returns:
+        List of remote branch names
+    """
+    primary_branch = project.get_primary_branch()
+    primary_path = project.path / primary_branch
+
+    # Fetch latest
+    subprocess.run(
+        ["git", "-C", str(primary_path), "fetch", "origin"],
+        capture_output=True,
+        check=False,
+    )
+
+    result = subprocess.run(
+        ["git", "-C", str(primary_path), "branch", "-r"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    branches = []
+    for line in result.stdout.split("\n"):
+        line = line.strip()
+        if not line or "HEAD" in line:
+            continue
+
+        # Remove origin/ prefix
+        if line.startswith("origin/"):
+            line = line.replace("origin/", "")
+
+        branches.append(line)
+
+    return sorted(branches)
+
+
+def select_or_enter_branch(project: "Project") -> str:
+    """Interactive wizard to select or enter a branch name.
+
+    Returns:
+        Selected or entered branch name
+    """
+    console.print("\n[bold]Select or enter a branch:[/bold]")
+    console.print("  1. Select from remote branches")
+    console.print("  2. Enter branch name manually")
+
+    choice = Prompt.ask("Enter choice", choices=["1", "2"], default="1")
+
+    if choice == "1":
+        # List remote branches
+        console.print("\n[dim]Fetching remote branches...[/dim]")
+        branches = list_remote_branches(project)
+
+        if not branches:
+            error("No remote branches found")
+            sys.exit(1)
+
+        # Use fzf if available, otherwise simple selection
+        if has_fzf():
+            return _select_branch_with_fzf(branches)
+        else:
+            return _select_branch_simple(branches)
+    else:
+        # Manual entry
+        branch_name = Prompt.ask("\nEnter branch name")
+        if not branch_name:
+            error("Branch name cannot be empty")
+            sys.exit(1)
+        return branch_name
+
+
+def _select_branch_with_fzf(branches: list[str]) -> str:
+    """Select branch using fzf."""
+    try:
+        result = subprocess.run(
+            ["fzf", "--height", "50%", "--reverse", "--prompt", "Branch: "],
+            input="\n".join(branches),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        error("Selection cancelled")
+        sys.exit(1)
+
+
+def _select_branch_simple(branches: list[str]) -> str:
+    """Select branch with simple numbered list."""
+    console.print("\n[bold]Available branches:[/bold]")
+
+    for idx, branch in enumerate(branches, 1):
+        console.print(f"  {idx}. [cyan]{branch}[/cyan]")
+
+    while True:
+        choice = Prompt.ask("Enter number", default="1")
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(branches):
+                return branches[idx]
+            console.print(f"[red]Invalid choice. Enter 1-{len(branches)}[/red]")
+        except ValueError:
+            console.print("[red]Invalid input. Enter a number.[/red]")
+
+
+def prompt_for_workspace_name(default_name: str) -> str:
+    """Prompt user for workspace name.
+
+    Args:
+        default_name: Default name to suggest
+
+    Returns:
+        User-entered or default workspace name
+    """
+    console.print(f"\n[bold]Workspace name:[/bold]")
+    console.print(f"  Default: [cyan]{default_name}[/cyan]")
+
+    workspace_name = Prompt.ask(
+        "Enter workspace name (or press Enter for default)",
+        default=default_name
+    )
+
+    return workspace_name

@@ -1,14 +1,24 @@
 """Project and git branch directory management."""
 
+import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from rich.prompt import Confirm
 
 from .container import Container, ContainerStatus
+
+
+@dataclass
+class WorkspaceMetadata:
+    """Metadata for a workspace in project-config.json."""
+
+    git_branch: str
+    created_at: str
 
 
 @dataclass
@@ -32,9 +42,53 @@ class Project:
         self.path = path or Path.cwd()
         self._validate_location()
 
+    def _get_config_path(self) -> Path:
+        """Return path to project-config.json."""
+        return self.path / "project-config.json"
+
+    def _load_config(self) -> dict[str, WorkspaceMetadata]:
+        """Load project-config.json and return workspace mappings.
+
+        Returns:
+            Dictionary mapping workspace names to metadata
+        """
+        config_path = self._get_config_path()
+        if not config_path.exists():
+            return {}
+
+        with open(config_path, 'r') as f:
+            data = json.load(f)
+
+        return {
+            workspace_name: WorkspaceMetadata(**meta)
+            for workspace_name, meta in data.get('workspaces', {}).items()
+        }
+
+    def _save_config(self, mappings: dict[str, WorkspaceMetadata]) -> None:
+        """Save workspace mappings to project-config.json.
+
+        Args:
+            mappings: Dictionary mapping workspace names to metadata
+        """
+        config_path = self._get_config_path()
+
+        data = {
+            'workspaces': {
+                workspace_name: {
+                    'git_branch': meta.git_branch,
+                    'created_at': meta.created_at
+                }
+                for workspace_name, meta in mappings.items()
+            }
+        }
+
+        with open(config_path, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.write('\n')
+
     @staticmethod
     def _validate_branch_name(branch_name: str) -> None:
-        """Validate branch name to prevent path traversal attacks.
+        """Validate git branch name.
 
         Args:
             branch_name: Branch name to validate
@@ -45,62 +99,89 @@ class Project:
         if not branch_name:
             raise ValueError("Branch name cannot be empty")
 
-        # Check for path traversal attempts
-        if '/' in branch_name or '\\' in branch_name:
-            raise ValueError(
-                f"Invalid branch name '{branch_name}': cannot contain path separators"
-            )
-
+        # Allow slashes for git branch names
+        # Only check for dangerous patterns
         if '..' in branch_name:
             raise ValueError(
                 f"Invalid branch name '{branch_name}': cannot contain '..'"
             )
 
-        # Check for other problematic characters
-        if branch_name.startswith('.'):
+    @staticmethod
+    def _validate_workspace_name(workspace_name: str) -> None:
+        """Validate workspace name (more restrictive than branch names).
+
+        Args:
+            workspace_name: Workspace name to validate
+
+        Raises:
+            ValueError: If workspace name contains invalid characters
+        """
+        if not workspace_name:
+            raise ValueError("Workspace name cannot be empty")
+
+        # Check for path traversal attempts
+        if '/' in workspace_name or '\\' in workspace_name:
             raise ValueError(
-                f"Invalid branch name '{branch_name}': cannot start with '.'"
+                f"Invalid workspace name '{workspace_name}': cannot contain path separators"
+            )
+
+        if '..' in workspace_name:
+            raise ValueError(
+                f"Invalid workspace name '{workspace_name}': cannot contain '..'"
+            )
+
+        if workspace_name.startswith('.'):
+            raise ValueError(
+                f"Invalid workspace name '{workspace_name}': cannot start with '.'"
             )
 
     def _validate_location(self) -> None:
         """Validate that commands are run from parent directory.
 
         Raises:
-            RuntimeError: If inside branch subdirectory
+            RuntimeError: If inside workspace subdirectory
         """
-        # Check if we're inside a branch subdirectory
+        # Check if we're inside a workspace subdirectory
         if (self.path / ".git").is_dir():
-            # We're in a git repository - check if parent has other branch dirs
+            # We're in a git repository - check if parent has other workspaces
             parent = self.path.parent
             if parent.exists():
-                branch_dirs = self._find_branch_directories(parent)
-                if len(branch_dirs) > 1:
+                workspaces = self._find_workspaces(parent)
+                if len(workspaces) > 1:
                     raise RuntimeError(
-                        f"You appear to be inside a branch directory: {self.path.name}\n"
+                        f"You appear to be inside a workspace directory: {self.path.name}\n"
                         f"DV commands must be run from the parent directory: {parent}\n"
                         f"Run: cd {parent}"
                     )
 
-    def _find_branch_directories(self, search_path: Optional[Path] = None) -> list[Path]:
-        """Scan immediate subdirectories for valid git repos.
+    def _find_workspaces(self, search_path: Optional[Path] = None) -> list[Path]:
+        """Scan workspace subdirectories listed in project-config.json.
 
         Args:
             search_path: Directory to search in (defaults to self.path)
 
         Returns:
-            List of paths to branch directories
+            List of paths to workspace directories
         """
         search_path = search_path or self.path
-        branch_dirs = []
 
-        if not search_path.is_dir():
-            return branch_dirs
+        # Load config to get valid workspace names
+        # Need to temporarily set path if using search_path
+        if search_path != self.path:
+            original_path = self.path
+            self.path = search_path
+            mappings = self._load_config()
+            self.path = original_path
+        else:
+            mappings = self._load_config()
 
-        for item in search_path.iterdir():
-            if item.is_dir() and self._is_valid_git_repo(item):
-                branch_dirs.append(item)
+        workspaces = []
+        for workspace_name in mappings.keys():
+            workspace_path = search_path / workspace_name
+            if workspace_path.is_dir() and self._is_valid_git_repo(workspace_path):
+                workspaces.append(workspace_path)
 
-        return sorted(branch_dirs, key=lambda p: p.name)
+        return sorted(workspaces, key=lambda p: p.name)
 
     def _is_valid_git_repo(self, path: Path) -> bool:
         """Validate using git rev-parse --git-dir.
@@ -123,55 +204,69 @@ class Project:
 
     @property
     def is_dv_project(self) -> bool:
-        """Check if this is a DV project (has branch directories)."""
-        return len(self._find_branch_directories()) > 0
+        """Check if this is a DV project (has project-config.json)."""
+        return self._get_config_path().exists()
 
-    def list_branch_directories(self) -> list[BranchInfo]:
-        """List all branch directories with their status.
+    def list_workspaces(self) -> list[BranchInfo]:
+        """List all workspaces with their status and git branch mapping.
 
         Returns:
-            List of BranchInfo for each branch directory
+            List of BranchInfo for each workspace
         """
-        branch_dirs = self._find_branch_directories()
+        workspaces = self._find_workspaces()
+        mappings = self._load_config()
         results = []
 
-        for branch_dir in branch_dirs:
-            # Get current branch
-            try:
-                result = subprocess.run(
-                    ["git", "-C", str(branch_dir), "branch", "--show-current"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                branch = result.stdout.strip() or "detached"
-            except subprocess.CalledProcessError:
-                branch = "unknown"
+        for workspace_path in workspaces:
+            workspace_name = workspace_path.name
+
+            # Get git branch from config (required)
+            if workspace_name in mappings:
+                git_branch = mappings[workspace_name].git_branch
+            else:
+                # This shouldn't happen if config is in sync
+                git_branch = "unknown"
 
             # Get container status
-            container = Container(branch_dir)
+            container = Container(workspace_path)
             status = container.get_status()
 
-            results.append(BranchInfo(path=branch_dir, branch=branch, status=status))
+            results.append(BranchInfo(
+                path=workspace_path,
+                branch=git_branch,  # Now shows actual git branch name
+                status=status
+            ))
 
         return results
 
-    def resolve_branch(self, name: str) -> Path:
-        """Map branch name to directory path.
+    def list_branch_directories(self) -> list[BranchInfo]:
+        """Deprecated: Use list_workspaces() instead."""
+        return self.list_workspaces()
+
+    def resolve_workspace(self, workspace_name: str) -> Path:
+        """Map workspace name to workspace path.
 
         Args:
-            name: Branch directory name
+            workspace_name: Workspace name (not git branch name)
 
         Returns:
-            Path to branch directory
+            Path to workspace directory
 
         Raises:
-            ValueError: If branch directory not found or invalid
+            ValueError: If workspace not found in config or invalid
         """
-        # Validate branch name first
-        self._validate_branch_name(name)
+        # Validate workspace name
+        self._validate_workspace_name(workspace_name)
 
-        candidate = self.path / name
+        # Check if workspace exists in config
+        mappings = self._load_config()
+        if workspace_name not in mappings:
+            raise ValueError(
+                f"Workspace '{workspace_name}' not found in project config.\n"
+                f"Run 'dv workspace list' to see available workspaces."
+            )
+
+        candidate = self.path / workspace_name
 
         # Security check: ensure resolved path doesn't escape project directory
         try:
@@ -180,35 +275,63 @@ class Project:
 
             if not candidate_resolved.is_relative_to(project_resolved):
                 raise ValueError(
-                    f"Invalid branch directory path: {name} (path traversal detected)"
+                    f"Invalid workspace path: {workspace_name} (path traversal detected)"
                 )
-        except (ValueError, OSError) as e:
-            raise ValueError(f"Invalid branch directory: {name}")
+        except (ValueError, OSError):
+            raise ValueError(f"Invalid workspace: {workspace_name}")
 
         if self._is_valid_git_repo(candidate):
             return candidate
-        raise ValueError(f"Branch directory not found: {name}")
+
+        raise ValueError(
+            f"Workspace '{workspace_name}' exists in config but is not a valid git repository"
+        )
+
+    def resolve_branch(self, name: str) -> Path:
+        """Deprecated: Use resolve_workspace() instead."""
+        return self.resolve_workspace(name)
 
     def get_primary_branch(self) -> str:
-        """Find main or master directory.
+        """Find primary workspace name.
 
         Returns:
-            Name of primary branch (main, master, or first alphabetically)
+            Workspace name of primary branch (main, master, or first alphabetically)
 
         Raises:
-            RuntimeError: If no branch directories exist
+            RuntimeError: If no workspaces exist
         """
-        branch_dirs = self._find_branch_directories()
-        if not branch_dirs:
-            raise RuntimeError("No branch directories found")
+        mappings = self._load_config()
+        if not mappings:
+            raise RuntimeError("No workspaces found")
 
-        # Prefer main or master
-        for branch_dir in branch_dirs:
-            if branch_dir.name in ("main", "master"):
-                return branch_dir.name
+        # Look for workspace mapped to 'main' or 'master' branch
+        for workspace_name, meta in mappings.items():
+            if meta.git_branch in ("main", "master"):
+                return workspace_name
 
         # Fall back to first alphabetically
-        return branch_dirs[0].name
+        return sorted(mappings.keys())[0]
+
+    def _generate_default_workspace_name(self, git_branch: str) -> str:
+        """Generate default workspace name from git branch name.
+
+        Args:
+            git_branch: Git branch name (e.g., 'feature/sc-18234/update-file')
+
+        Returns:
+            Sanitized workspace name with timestamp
+            (e.g., 'feature-sc-18234-update-file-20260213143022')
+        """
+        # Replace slashes with hyphens
+        sanitized = git_branch.replace('/', '-').replace('\\', '-')
+
+        # Remove any other problematic characters
+        sanitized = ''.join(c if c.isalnum() or c in '-_' else '-' for c in sanitized)
+
+        # Add timestamp
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+
+        return f"{sanitized}-{timestamp}"
 
     def _get_remote_url(self) -> str:
         """Get origin URL from primary branch's .git/config.
@@ -233,46 +356,60 @@ class Project:
         except subprocess.CalledProcessError:
             raise RuntimeError(f"Could not get remote URL from {primary_branch}")
 
-    def add_branch_directory(self, branch_name: str, use_git_clone: bool = False) -> Path:
-        """Add a new branch directory.
+    def add_workspace(
+        self,
+        git_branch: str,
+        workspace_name: str,
+        use_git_clone: bool = False
+    ) -> Path:
+        """Add a new workspace with config mapping.
 
         Args:
-            branch_name: Name of branch to create directory for
-            use_git_clone: If True, use full git clone; if False, use local clone
+            git_branch: Git branch name (can contain slashes)
+            workspace_name: Workspace name to create (filesystem safe)
+            use_git_clone: If True, use full git clone; if False, copy primary workspace
 
         Returns:
-            Path to new branch directory
+            Path to new workspace directory
 
         Raises:
-            ValueError: If directory already exists or invalid branch name
-            RuntimeError: If branch doesn't exist remotely
+            ValueError: If workspace already exists or invalid names
+            RuntimeError: If fetch from remote fails
         """
-        # Validate branch name first
-        self._validate_branch_name(branch_name)
+        # Validate both names
+        self._validate_branch_name(git_branch)
+        self._validate_workspace_name(workspace_name)
 
-        branch_dir = self.path / branch_name
+        workspace_dir = self.path / workspace_name
 
-        # Security check: ensure path doesn't escape project directory
+        # Security check
         try:
-            branch_dir_resolved = branch_dir.resolve()
+            workspace_dir_resolved = workspace_dir.resolve()
             project_resolved = self.path.resolve()
 
-            if not branch_dir_resolved.is_relative_to(project_resolved):
+            if not workspace_dir_resolved.is_relative_to(project_resolved):
                 raise ValueError(
-                    f"Invalid branch directory path: {branch_name} (path traversal detected)"
+                    f"Invalid workspace path: {workspace_name} (path traversal detected)"
                 )
         except (ValueError, OSError):
-            raise ValueError(f"Invalid branch name: {branch_name}")
+            raise ValueError(f"Invalid workspace name: {workspace_name}")
 
-        if branch_dir.exists():
-            raise ValueError(f"Branch directory already exists: {branch_name}")
+        if workspace_dir.exists():
+            raise ValueError(f"Workspace already exists: {workspace_name}")
+
+        # Check if workspace name already in config
+        mappings = self._load_config()
+        if workspace_name in mappings:
+            raise ValueError(
+                f"Workspace '{workspace_name}' already exists in config"
+            )
 
         # Get remote URL and primary branch
         remote_url = self._get_remote_url()
         primary_branch = self.get_primary_branch()
         primary_path = self.path / primary_branch
 
-        # Fetch in primary branch first to ensure branch exists remotely
+        # Fetch to get latest remote branches
         try:
             subprocess.run(
                 ["git", "-C", str(primary_path), "fetch", "origin"],
@@ -284,68 +421,87 @@ class Project:
 
         # Check if branch exists remotely
         result = subprocess.run(
-            ["git", "-C", str(primary_path), "ls-remote", "--heads", "origin", branch_name],
+            ["git", "-C", str(primary_path), "ls-remote", "origin", f"refs/heads/{git_branch}"],
             capture_output=True,
             text=True,
         )
-        if not result.stdout.strip():
-            raise RuntimeError(
-                f"Branch '{branch_name}' does not exist on remote.\n"
-                f"Create it first with: cd {primary_branch} && git checkout -b {branch_name} && git push -u origin {branch_name}"
-            )
+        branch_exists_on_remote = bool(result.stdout.strip())
 
+        # Clone the repository
         if use_git_clone:
             # Full git clone from remote
             subprocess.run(
-                ["git", "clone", remote_url, "--branch", branch_name, str(branch_dir)],
+                ["git", "clone", remote_url, str(workspace_dir)],
                 check=True,
             )
         else:
-            # Local clone (fast)
+            # Copy the primary workspace directory (includes .git with all state)
+            shutil.copytree(primary_path, workspace_dir, symlinks=True)
+
+        # Switch to the branch
+        if branch_exists_on_remote:
             subprocess.run(
-                ["git", "clone", "--local", str(primary_path), str(branch_dir)],
+                ["git", "-C", str(workspace_dir), "switch", git_branch],
                 check=True,
             )
-            # Checkout target branch
+        else:
             subprocess.run(
-                ["git", "-C", str(branch_dir), "checkout", branch_name],
+                ["git", "-C", str(workspace_dir), "switch", "-c", git_branch],
                 check=True,
             )
 
-        return branch_dir
+        # Update config with new mapping
+        mappings[workspace_name] = WorkspaceMetadata(
+            git_branch=git_branch,
+            created_at=datetime.now().isoformat()
+        )
+        self._save_config(mappings)
 
-    def remove_branch_directory(self, branch_name: str, force: bool = False) -> bool:
-        """Remove a branch directory and its container.
+        return workspace_dir
+
+    def add_branch_directory(self, branch_name: str, use_git_clone: bool = False) -> Path:
+        """Deprecated: Use add_workspace() instead.
+
+        For backwards compatibility, workspace_name = branch_name.
+        """
+        return self.add_workspace(
+            git_branch=branch_name,
+            workspace_name=branch_name,
+            use_git_clone=use_git_clone
+        )
+
+    def remove_branch_directory(self, workspace_name: str, force: bool = False) -> bool:
+        """Remove a workspace directory and its container.
 
         Args:
-            branch_name: Name of branch directory to remove
+            workspace_name: Name of workspace directory to remove
             force: If True, skip confirmation prompt
 
         Returns:
             True if successful, False if cancelled
 
         Raises:
-            ValueError: If directory doesn't exist or invalid branch name
+            ValueError: If directory doesn't exist or invalid workspace name
         """
-        # Validate branch name first
-        self._validate_branch_name(branch_name)
+        # Validate workspace name first
+        self._validate_workspace_name(workspace_name)
 
-        branch_dir = self.path / branch_name
+        workspace_dir = self.path / workspace_name
 
         # Security check: ensure path doesn't escape project directory
         try:
-            branch_dir_resolved = branch_dir.resolve()
+            workspace_dir_resolved = workspace_dir.resolve()
             project_resolved = self.path.resolve()
 
-            if not branch_dir_resolved.is_relative_to(project_resolved):
+            if not workspace_dir_resolved.is_relative_to(project_resolved):
                 raise ValueError(
-                    f"Invalid branch directory path: {branch_name} (path traversal detected)"
+                    f"Invalid workspace path: {workspace_name} (path traversal detected)"
                 )
         except (ValueError, OSError):
-            raise ValueError(f"Invalid branch name: {branch_name}")
+            raise ValueError(f"Invalid workspace name: {workspace_name}")
 
-        if not branch_dir.exists():
-            raise ValueError(f"Branch directory not found: {branch_name}")
+        if not workspace_dir.exists():
+            raise ValueError(f"Workspace directory not found: {workspace_name}")
 
         # Show what will be deleted and ask for confirmation
         if not force:
@@ -353,7 +509,7 @@ class Project:
             console = Console()
             console.print(f"\n[bold red]⚠️  DESTRUCTIVE ACTION[/bold red]")
             console.print(f"About to execute:")
-            console.print(f"  [dim]$ rm -rf {branch_dir}[/dim]")
+            console.print(f"  [dim]$ rm -rf {workspace_dir}[/dim]")
             console.print(f"  [yellow]All files and git history in this directory will be permanently lost.[/yellow]")
 
             if not Confirm.ask("Are you sure you want to continue?", default=False):
@@ -361,7 +517,7 @@ class Project:
                 return False
 
         # Stop container first
-        container = Container(branch_dir)
+        container = Container(workspace_dir)
         stopped = container.stop()
 
         if stopped:
@@ -370,7 +526,14 @@ class Project:
             console.print(f"  Stopped and removed container")
 
         # Remove directory
-        shutil.rmtree(branch_dir)
+        shutil.rmtree(workspace_dir)
+
+        # Remove from config
+        mappings = self._load_config()
+        if workspace_name in mappings:
+            del mappings[workspace_name]
+            self._save_config(mappings)
+
         return True
 
     def list_branches(self) -> list[str]:

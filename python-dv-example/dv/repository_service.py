@@ -1,7 +1,9 @@
 """Repository and branch workflow service layer."""
 
+import json
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -93,7 +95,7 @@ class RepositoryService:
         return "main"
 
     def clone_as_regular(self, url: str, name: Optional[str] = None) -> CloneResult:
-        """Clone repository as regular git clone with branch directory structure.
+        """Clone repository and initialize project-config.json.
 
         Args:
             url: Git repository URL
@@ -124,6 +126,21 @@ class RepositoryService:
             check=True,
         )
 
+        # Create initial project-config.json
+        config_path = project_dir / "project-config.json"
+        config_data = {
+            "workspaces": {
+                default_branch: {
+                    "git_branch": default_branch,
+                    "created_at": datetime.now().isoformat()
+                }
+            }
+        }
+
+        with open(config_path, 'w') as f:
+            json.dump(config_data, f, indent=2)
+            f.write('\n')
+
         return CloneResult(
             project_dir=project_dir,
             primary_branch_path=branch_dir,
@@ -133,38 +150,44 @@ class RepositoryService:
     def add_branch_with_container(
         self,
         project: Project,
-        branch: str,
+        git_branch: str,
+        workspace_name: str,
         start_container: bool = True,
         use_external_dotfiles: bool = False,
         use_git_clone: bool = False,
     ) -> BranchAddResult:
-        """Create branch directory and optionally start its container.
+        """Create workspace and optionally start its container.
 
         Args:
             project: Project instance
-            branch: Branch name for the directory
-            start_container: Whether to start devcontainer (default: True)
-            use_external_dotfiles: Whether to use external dotfiles (default: False)
-            use_git_clone: Whether to use full git clone (default: False, uses local clone)
+            git_branch: Git branch name (can contain slashes)
+            workspace_name: Workspace name to create (filesystem safe)
+            start_container: Whether to start devcontainer
+            use_external_dotfiles: Whether to use external dotfiles
+            use_git_clone: If True, use full git clone; if False, copy primary workspace
 
         Returns:
             BranchAddResult with path and branch info
 
         Raises:
-            RuntimeError: If not in DV project
-            ValueError: If branch directory already exists
+            RuntimeError: If not in DV project or fetch from remote fails
+            ValueError: If workspace already exists
             subprocess.CalledProcessError: If git or devcontainer commands fail
         """
-        # Create branch directory using project method
-        branch_path = project.add_branch_directory(branch, use_git_clone)
+        # Create workspace using project method
+        workspace_path = project.add_workspace(
+            git_branch=git_branch,
+            workspace_name=workspace_name,
+            use_git_clone=use_git_clone
+        )
 
         # Start container if requested
         if start_container:
-            self.devcontainer_service.up(branch_path, use_external_dotfiles)
+            self.devcontainer_service.up(workspace_path, use_external_dotfiles)
 
         return BranchAddResult(
-            branch_path=branch_path,
-            branch=branch,
+            branch_path=workspace_path,
+            branch=git_branch,
             was_created=True,
         )
 
