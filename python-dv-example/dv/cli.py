@@ -13,6 +13,8 @@ from rich.table import Table
 from . import __version__
 from .config import Config
 from .container import Container
+from .devcontainer_service import DevcontainerService
+from .repository_service import RepositoryService
 from .utils import (
     console,
     error,
@@ -26,6 +28,40 @@ from .workspace import Workspace
 
 # Global context object
 pass_config = click.make_pass_decorator(Config, ensure=True)
+
+
+def _resolve_worktree_with_selection(
+    workspace: Workspace, worktree: Optional[str], select: bool
+) -> Path:
+    """Helper to resolve worktree with interactive selection support.
+
+    Args:
+        workspace: Workspace instance
+        worktree: Optional worktree name
+        select: Whether to use interactive selection
+
+    Returns:
+        Resolved worktree path
+
+    Raises:
+        SystemExit: If worktree not found or selection cancelled
+    """
+    if select:
+        worktrees = workspace.list_worktrees()
+        if not worktrees:
+            error("No worktrees found")
+            sys.exit(1)
+        selected = select_worktree(worktrees)
+        if not selected:
+            error("No worktree selected")
+            sys.exit(1)
+        return selected.path
+    else:
+        try:
+            return workspace.resolve_worktree(worktree)
+        except ValueError as e:
+            error(str(e))
+            sys.exit(1)
 
 
 @click.group(invoke_without_command=True)
@@ -63,65 +99,19 @@ def up(config: Config, worktree: Optional[str], dotfile: bool, select: bool) -> 
         dv up --dotfile    # Use external dotfiles
     """
     ws = Workspace()
+    service = DevcontainerService(config)
 
     # Resolve which worktree to use
-    if select:
-        worktrees = ws.list_worktrees()
-        if not worktrees:
-            error("No worktrees found")
-            sys.exit(1)
-        selected = select_worktree(worktrees)
-        if not selected:
-            error("No worktree selected")
-            sys.exit(1)
-        workspace_path = selected.path
-    else:
-        try:
-            workspace_path = ws.resolve_worktree(worktree)
-        except ValueError as e:
-            error(str(e))
-            sys.exit(1)
+    workspace_path = _resolve_worktree_with_selection(ws, worktree, select)
 
     console.print(f"Starting devcontainer in: [cyan]{workspace_path.name}[/cyan]")
 
-    # Build devcontainer up command
-    cmd = [
-        "up",
-        "--workspace-folder", str(workspace_path),
-        "--mount", "type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent",
-        "--mount", f"type=bind,source={Path.home()}/.ssh/known_hosts,target=/ssh/known_hosts",
-        "--mount-git-worktree-common-dir",
-        "--update-remote-user-uid-default", "on",
-        "--remove-existing-container",
-    ]
-
-    # Add remote env args
-    cmd.extend(config.get_remote_env_args())
-
-    if dotfile:
-        # Use external dotfiles
-        cmd.extend(["--dotfiles-repository", config.dotfiles_repo])
-    else:
-        # Mount local dotfiles
-        cmd.extend(["--mount", f"type=bind,source={config.dotfiles_dir},target=/dotfiles"])
-
     # Run devcontainer up
     try:
-        subprocess.run(["devcontainer"] + cmd, check=True)
-
-        if not dotfile:
-            # Run local dotfiles installation
-            console.print("Running local dotfiles installation...")
-            exec_cmd = [
-                "exec",
-                "--workspace-folder", str(workspace_path),
-            ] + config.get_remote_env_args() + [
-                "--", "bash", "-c", "cd /dotfiles && ./install.sh"
-            ]
-            subprocess.run(["devcontainer"] + exec_cmd, check=True)
-
-        success(f"Devcontainer started with {'external' if dotfile else 'local'} dotfiles")
-
+        service.up(workspace_path, use_external_dotfiles=dotfile)
+        success(
+            f"Devcontainer started with {'external' if dotfile else 'local'} dotfiles"
+        )
     except subprocess.CalledProcessError as e:
         error(f"Failed to start devcontainer: {e}")
         sys.exit(1)
@@ -129,7 +119,9 @@ def up(config: Config, worktree: Optional[str], dotfile: bool, select: bool) -> 
 
 @main.command()
 @click.argument("worktree", required=False)
-@click.option("--shell", "-s", is_flag=True, help="Open interactive shell instead of dev command")
+@click.option(
+    "--shell", "-s", is_flag=True, help="Open interactive shell instead of dev command"
+)
 @click.option("--select", is_flag=True, help="Interactive worktree selection")
 @pass_config
 def go(config: Config, worktree: Optional[str], shell: bool, select: bool) -> None:
@@ -142,39 +134,20 @@ def go(config: Config, worktree: Optional[str], shell: bool, select: bool) -> No
         dv go --select     # Interactive selection
     """
     ws = Workspace()
+    service = DevcontainerService(config)
 
     # Resolve worktree
-    if select:
-        worktrees = ws.list_worktrees()
-        if not worktrees:
-            error("No worktrees found")
-            sys.exit(1)
-        selected = select_worktree(worktrees)
-        if not selected:
-            error("No worktree selected")
-            sys.exit(1)
-        workspace_path = selected.path
-    else:
-        try:
-            workspace_path = ws.resolve_worktree(worktree)
-        except ValueError as e:
-            error(str(e))
-            sys.exit(1)
+    workspace_path = _resolve_worktree_with_selection(ws, worktree, select)
 
-    # Build exec command
-    cmd = [
-        "exec",
-        "--workspace-folder", str(workspace_path),
-    ] + config.get_remote_env_args()
-
+    # Determine command to run
     if shell:
-        cmd.extend(["--", "zsh"])
+        command = ["zsh"]
     else:
-        cmd.extend(["--", "zsh", "-ic", "dev"])
+        command = ["zsh", "-ic", "dev"]
 
     # Run interactively
     try:
-        subprocess.run(["devcontainer"] + cmd, check=False)
+        service.exec(workspace_path, command, interactive=True)
     except KeyboardInterrupt:
         pass
 
@@ -192,29 +165,14 @@ def down(config: Config, worktree: Optional[str], select: bool) -> None:
         dv down --select     # Interactive selection
     """
     ws = Workspace()
+    service = DevcontainerService(config)
 
     # Resolve worktree
-    if select:
-        worktrees = ws.list_worktrees()
-        if not worktrees:
-            error("No worktrees found")
-            sys.exit(1)
-        selected = select_worktree(worktrees)
-        if not selected:
-            error("No worktree selected")
-            sys.exit(1)
-        workspace_path = selected.path
-    else:
-        try:
-            workspace_path = ws.resolve_worktree(worktree)
-        except ValueError as e:
-            error(str(e))
-            sys.exit(1)
+    workspace_path = _resolve_worktree_with_selection(ws, worktree, select)
 
-    container = Container(workspace_path)
     console.print(f"Stopping devcontainer in: [cyan]{workspace_path.name}[/cyan]")
 
-    if container.stop():
+    if service.down(workspace_path):
         success("Devcontainer stopped and removed")
     else:
         warning("No devcontainer found")
@@ -225,7 +183,9 @@ def down(config: Config, worktree: Optional[str], select: bool) -> None:
 @click.argument("command", nargs=-1, required=True)
 @click.option("--select", is_flag=True, help="Interactive worktree selection")
 @pass_config
-def exec(config: Config, worktree: Optional[str], command: tuple[str, ...], select: bool) -> None:
+def exec(
+    config: Config, worktree: Optional[str], command: tuple[str, ...], select: bool
+) -> None:
     """Execute a command in the devcontainer.
 
     Examples:
@@ -234,32 +194,12 @@ def exec(config: Config, worktree: Optional[str], command: tuple[str, ...], sele
         dv exec --select -- bash
     """
     ws = Workspace()
+    service = DevcontainerService(config)
 
     # Resolve worktree
-    if select:
-        worktrees = ws.list_worktrees()
-        if not worktrees:
-            error("No worktrees found")
-            sys.exit(1)
-        selected = select_worktree(worktrees)
-        if not selected:
-            error("No worktree selected")
-            sys.exit(1)
-        workspace_path = selected.path
-    else:
-        try:
-            workspace_path = ws.resolve_worktree(worktree)
-        except ValueError as e:
-            error(str(e))
-            sys.exit(1)
+    workspace_path = _resolve_worktree_with_selection(ws, worktree, select)
 
-    # Build exec command
-    cmd = [
-        "exec",
-        "--workspace-folder", str(workspace_path),
-    ] + config.get_remote_env_args() + ["--"] + list(command)
-
-    subprocess.run(["devcontainer"] + cmd, check=False)
+    service.exec(workspace_path, list(command), interactive=False)
 
 
 @main.command()
@@ -335,53 +275,28 @@ def clone(config: Config, url: str, name: Optional[str]) -> None:
         dv clone git@github.com:user/repo.git
         dv clone https://github.com/user/repo.git my-project
     """
-    # Derive project name from URL if not provided
-    if not name:
-        name = Path(url).stem
-
-    project_dir = Path.cwd() / name
-    bare_repo = project_dir / ".bare"
+    service = RepositoryService(config)
 
     console.print(f"Cloning {url} as bare repository...")
 
     try:
-        # Create project directory and clone
-        project_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "clone", "--bare", url, str(bare_repo)],
-            check=True,
-        )
+        result = service.clone_as_bare(url, name)
 
-        # Create .git file pointing to .bare
-        (project_dir / ".git").write_text("gitdir: ./.bare\n")
-
-        # Get default branch
-        result = subprocess.run(
-            ["git", "--git-dir", str(bare_repo), "symbolic-ref", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        default_branch = result.stdout.strip() or "main"
-
-        success(f"Bare repository created at {bare_repo}")
-        console.print(f"Creating worktree for branch: [cyan]{default_branch}[/cyan]")
-
-        # Create worktree
-        subprocess.run(
-            ["git", "worktree", "add", "--relative-paths", default_branch, default_branch],
-            cwd=project_dir,
-            check=True,
-        )
-
+        success(f"Bare repository created at {result.bare_repo}")
+        console.print(f"Creating worktree for branch: [cyan]{result.default_branch}[/cyan]")
         success("Project cloned and worktree structure set up!")
+
         console.print(f"\n[bold]Next steps:[/bold]")
-        console.print(f"  cd {name}/{default_branch}")
+        console.print(f"  cd {result.project_dir.name}/{result.default_branch}")
         console.print("\n[bold]Available commands:[/bold]")
         console.print("  [cyan]dv up[/cyan]              - Start the devcontainer")
-        console.print("  [cyan]dv worktree add[/cyan]    - Create a new worktree for a branch")
+        console.print(
+            "  [cyan]dv worktree add[/cyan]    - Create a new worktree for a branch"
+        )
         console.print("  [cyan]dv worktree list[/cyan]   - List all worktrees")
-        console.print("  [cyan]dv exec[/cyan]            - Execute a command in the devcontainer")
+        console.print(
+            "  [cyan]dv exec[/cyan]            - Execute a command in the devcontainer"
+        )
 
     except subprocess.CalledProcessError as e:
         error(f"Failed to clone: {e}")
@@ -400,7 +315,9 @@ def worktree() -> None:
 @click.option("--no-start", is_flag=True, help="Don't automatically start devcontainer")
 @click.option("--select", is_flag=True, help="Interactive branch selection")
 @pass_config
-def worktree_add(config: Config, branch: Optional[str], no_start: bool, select: bool) -> None:
+def worktree_add(
+    config: Config, branch: Optional[str], no_start: bool, select: bool
+) -> None:
     """Create a new worktree and start its devcontainer.
 
     Examples:
@@ -409,6 +326,7 @@ def worktree_add(config: Config, branch: Optional[str], no_start: bool, select: 
         dv worktree add new-feature --no-start
     """
     ws = Workspace()
+    service = RepositoryService(config)
 
     if not ws.is_worktree_project:
         error("Not in a worktree-enabled project")
@@ -429,31 +347,20 @@ def worktree_add(config: Config, branch: Optional[str], no_start: bool, select: 
     console.print(f"Creating worktree for branch: [cyan]{branch}[/cyan]")
 
     try:
-        worktree_path = ws.add_worktree(branch)
-        success(f"Worktree created at: {worktree_path}")
+        result = service.add_worktree_with_container(
+            workspace=ws,
+            branch=branch,
+            start_container=not no_start,
+            use_external_dotfiles=False,
+        )
+
+        success(f"Worktree created at: {result.worktree_path}")
 
         if not no_start:
-            console.print("Starting devcontainer...")
-            # Change to worktree and run up
-            up_ws = Workspace(worktree_path)
-            workspace_path = up_ws.path
-
-            cmd = [
-                "up",
-                "--workspace-folder", str(workspace_path),
-                "--mount", "type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent",
-                "--mount", f"type=bind,source={Path.home()}/.ssh/known_hosts,target=/ssh/known_hosts",
-                "--mount-git-worktree-common-dir",
-                "--update-remote-user-uid-default", "on",
-                "--remove-existing-container",
-            ]
-            cmd.extend(config.get_remote_env_args())
-
-            subprocess.run(["devcontainer"] + cmd, check=True)
-            success("Devcontainer started")
+            success("Devcontainer started with local dotfiles")
         else:
             console.print("\nTo start the devcontainer, run:")
-            console.print(f"  cd {worktree_path}")
+            console.print(f"  cd {result.worktree_path}")
             console.print("  dv up")
 
     except (ValueError, RuntimeError, subprocess.CalledProcessError) as e:
@@ -485,7 +392,9 @@ def worktree_list() -> None:
     table.add_column("Path", style="dim")
 
     for wt in worktrees:
-        status_str = f"[{wt.status.color}]{wt.status.icon}[/{wt.status.color}] {wt.status.value}"
+        status_str = (
+            f"[{wt.status.color}]{wt.status.icon}[/{wt.status.color}] {wt.status.value}"
+        )
         table.add_row(status_str, wt.name, wt.branch, str(wt.path))
 
     console.print(table)
@@ -494,7 +403,8 @@ def worktree_list() -> None:
 @worktree.command("remove")
 @click.argument("branch", required=False)
 @click.option("--select", is_flag=True, help="Interactive selection")
-def worktree_remove(branch: Optional[str], select: bool) -> None:
+@pass_config
+def worktree_remove(config: Config, branch: Optional[str], select: bool) -> None:
     """Remove a worktree and its devcontainer.
 
     Examples:
@@ -502,6 +412,7 @@ def worktree_remove(branch: Optional[str], select: bool) -> None:
         dv worktree remove --select
     """
     ws = Workspace()
+    service = RepositoryService(config)
 
     if not ws.is_worktree_project:
         error("Not in a worktree-enabled project")
@@ -522,7 +433,7 @@ def worktree_remove(branch: Optional[str], select: bool) -> None:
     console.print(f"Removing worktree: [cyan]{branch}[/cyan]")
 
     try:
-        if ws.remove_worktree(branch):
+        if service.remove_worktree_with_container(ws, branch):
             success(f"Worktree removed: {branch}")
         else:
             error("Failed to remove worktree")
@@ -534,7 +445,8 @@ def worktree_remove(branch: Optional[str], select: bool) -> None:
 
 @main.command()
 @click.argument("worktree", required=False)
-def status(worktree: Optional[str]) -> None:
+@pass_config
+def status(config: Config, worktree: Optional[str]) -> None:
     """Show worktree and devcontainer status.
 
     Examples:
@@ -542,6 +454,7 @@ def status(worktree: Optional[str]) -> None:
         dv status main         # Show specific worktree
     """
     ws = Workspace()
+    service = DevcontainerService(config)
 
     if not ws.is_worktree_project:
         console.print("Not in a worktree-enabled project")
@@ -552,8 +465,7 @@ def status(worktree: Optional[str]) -> None:
     if worktree:
         try:
             path = ws.resolve_worktree(worktree)
-            container = Container(path)
-            status_val = container.get_status()
+            status_val = service.get_status(path)
 
             # Get branch
             result = subprocess.run(
@@ -567,7 +479,9 @@ def status(worktree: Optional[str]) -> None:
             console.print(f"Worktree: [cyan]{path.name}[/cyan]")
             console.print(f"  Path:      {path}")
             console.print(f"  Branch:    {branch}")
-            console.print(f"  Container: [{status_val.color}]{status_val.value}[/{status_val.color}]")
+            console.print(
+                f"  Container: [{status_val.color}]{status_val.value}[/{status_val.color}]"
+            )
 
         except ValueError as e:
             error(str(e))
@@ -580,7 +494,9 @@ def status(worktree: Optional[str]) -> None:
         console.print("[bold]Current Worktree:[/bold]")
         console.print(f"  Path:      {current.path}")
         console.print(f"  Branch:    {current.branch}")
-        console.print(f"  Container: [{current.status.color}]{current.status.value}[/{current.status.color}]")
+        console.print(
+            f"  Container: [{current.status.color}]{current.status.value}[/{current.status.color}]"
+        )
         console.print()
 
     # List other worktrees
