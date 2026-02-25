@@ -78,8 +78,7 @@ def _resolve_branch_with_selection(
 def main(ctx: click.Context, version: bool) -> None:
     """Devcontainer management tool for git workspace directories."""
     # Load configuration
-    config_file = Path.home() / ".config" / "dv" / "config.yml"
-    ctx.obj = Config.from_file(config_file)
+    ctx.obj = Config.from_env()
 
     if version:
         click.echo(f"dv version {__version__}")

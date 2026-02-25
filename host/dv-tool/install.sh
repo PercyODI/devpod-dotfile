@@ -53,13 +53,3 @@ else
     echo "  3. Open a new terminal"
 fi
 
-# Offer to copy example config
-echo ""
-read -p "Copy example config to ~/.config/dv/config.yml? (y/N) " -n 1 -r
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    mkdir -p ~/.config/dv
-    cp example-config.yml ~/.config/dv/config.yml
-    echo "✅ Config copied to ~/.config/dv/config.yml"
-    echo "   Edit this file to customize your settings."
-fi

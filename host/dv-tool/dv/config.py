@@ -4,7 +4,6 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-import yaml
 
 
 @dataclass
@@ -46,28 +45,6 @@ class Config:
             dotfiles_dir=Path(os.getenv("DOTFILES_DIR", Path.home() / "github" / "devpod-dotfile")),
             dotfiles_repo=os.getenv("DOTFILES_REPO", "https://github.com/PercyODI/devpod-dotfile"),
         )
-
-    @classmethod
-    def from_file(cls, path: Path) -> "Config":
-        """Load configuration from YAML file."""
-        if not path.exists():
-            return cls.from_env()
-
-        with open(path) as f:
-            data = yaml.safe_load(f) or {}
-
-        # Merge with environment variables (env takes precedence)
-        config = cls.from_env()
-
-        # Override with file values if env not set
-        if not config.anthropic_api_key and "anthropic_api_key" in data:
-            config.anthropic_api_key = data["anthropic_api_key"]
-        if not config.openai_api_key and "openai_api_key" in data:
-            config.openai_api_key = data["openai_api_key"]
-        if "images" in data:
-            config.images.update(data["images"])
-
-        return config
 
     def get_remote_env_args(self) -> list[str]:
         """Build list of --remote-env arguments for devcontainer CLI."""

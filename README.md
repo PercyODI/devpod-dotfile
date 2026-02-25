@@ -4,8 +4,6 @@ A Dotfile repo specifically for devpod environments
 
 ## Host System Requirements
 
-The following is required on the host system. Currently, no automation is set up for this, as it can vary a lot.
-
 ### Setup
 
 Clone this repository to a known location on your host system:
@@ -14,14 +12,6 @@ Clone this repository to a known location on your host system:
 git clone https://github.com/PercyODI/devpod-dotfile.git ~/github/devpod-dotfile
 ```
 
-Add the `host/bin` directory to your PATH by adding the following line to your shell configuration file (`.bashrc`, `.zshrc`, etc.):
-
-```bash
-export PATH="$HOME/github/devpod-dotfile/host/bin:$PATH"
-```
-
-After reloading your shell configuration (or opening a new terminal), you'll have access to the `d*` commands (e.g., `dup`, `dup-reset`, `dup-local`, `dgo`, `dgo-shell`, `dtemp-node`).
-
 ### Installed Applications
 
 - Docker Desktop
@@ -29,6 +19,7 @@ After reloading your shell configuration (or opening a new terminal), you'll hav
 - [direnv](https://direnv.net/)
   - https://www.papermtn.co.uk/secrets-management-managing-environment-variables-with-direnv/
 - Modern terminal (Wezterm, kitty, warp, iterm2, etc)
+- Python 3.9+
 
 ### SSH Keys
 
@@ -38,18 +29,31 @@ In order to use git via ssh, you must have the SSH Keys added to the keychain on
 ssh-add ~/.ssh/github_id_ed25519
 ```
 
-### Secrets
+### Environment Variables
 
-Secrets are expected to exist in `~/.envrc` on the via direnv host. Secrets will be loaded into the container with a specific env var name.
+`dv` is configured entirely through environment variables. Use [direnv](https://direnv.net/) with a `~/.envrc` file on your host system to manage them.
 
-| Secret             | Env Var Name      | Default                 |
-| ------------------ | ----------------- | ----------------------- |
-| Anthropic API Key  | ANTHROPIC_API_KEY |                         |
-| OpenAI API Key     | OPENAI_API_KEY    |                         |
-| Git User Name      | GIT_USER_NAME     |                         |
-| Git User Email     | GIT_USER_EMAIL    |                         |
-| Local Dotfile Repo | DOTFILES_DIR      | ~/github/devpod-dotfile |
-| Prefer Opencode    | PREFER_OPENCODE   | false                   |
+| Variable            | Default                                       | Description                              |
+|---------------------|-----------------------------------------------|------------------------------------------|
+| `ANTHROPIC_API_KEY` | (none)                                        | Anthropic API key for Claude Code        |
+| `OPENAI_API_KEY`    | (none)                                        | OpenAI API key                           |
+| `PREFER_OPENCODE`   | `false`                                       | Use Opencode instead of Claude Code      |
+| `GIT_USER_NAME`     | (none)                                        | Git author/committer name                |
+| `GIT_USER_EMAIL`    | (none)                                        | Git author/committer email               |
+| `DOTFILES_DIR`      | `~/github/devpod-dotfile`                     | Path to local dotfiles on the host       |
+| `DOTFILES_REPO`     | `https://github.com/PercyODI/devpod-dotfile`  | URL for external dotfiles repo           |
+
+Example `~/.envrc`:
+
+```bash
+source_up
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
+export GIT_USER_NAME="Your Name"
+export GIT_USER_EMAIL="you@example.com"
+```
+
+After editing `~/.envrc`, run `direnv allow` to activate the new values.
 
 ### AI Assistant Selection
 
@@ -61,193 +65,211 @@ export PREFER_OPENCODE=true
 
 When you run the `dev` command, it will automatically launch the preferred AI assistant in the tmux pane.
 
-## Working with Git Worktrees
+## Installing the `dv` Tool
 
-The `dv` command provides integrated support for git worktrees, allowing you to work on multiple branches simultaneously with isolated devcontainers.
+The `dv` command is a Python tool for managing devcontainers with git branch directories.
 
-### Quick Start with Worktrees
+### Quick Install
 
-1. **Clone a repository with worktree structure:**
+```bash
+cd ~/github/devpod-dotfile/host/dv-tool
+./install.sh
+```
+
+The install script will:
+1. Verify Python 3.9+ is available
+2. Install `dv` to `~/.local/bin` via pip
+3. Warn you if `~/.local/bin` is not in your PATH
+
+### PATH Setup
+
+If `~/.local/bin` is not already in your PATH, add the following to your `.bashrc` or `.zshrc`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then reload your shell:
+
+```bash
+source ~/.bashrc  # or source ~/.zshrc
+```
+
+### Manual Install Options
+
+```bash
+# Editable install (changes take effect immediately — good for development)
+cd ~/github/devpod-dotfile/host/dv-tool
+pip install -e .
+
+# Isolated environment with pipx
+pipx install ~/github/devpod-dotfile/host/dv-tool
+```
+
+## Working with Git Branch Directories
+
+The `dv` command uses a simple directory-per-branch structure — no special bare repository setup required.
+
+### Project Structure
+
+```
+project-name/
+├── main/               # Regular git clone (main branch)
+│   └── .git/
+├── feature-123/        # Another branch directory
+│   └── .git/
+└── bugfix-456/
+    └── .git/
+```
+
+### Quick Start
+
+1. **Clone a repository:**
    ```bash
    dv clone git@github.com:user/repo.git
    # Creates:
    #   repo/
-   #     .bare/          # Bare git repository
-   #     main/           # Main branch worktree (with devcontainer)
+   #     main/           # Default branch clone (with devcontainer)
    ```
 
-2. **Create a new worktree for a branch:**
+2. **Add a branch directory:**
    ```bash
-   cd repo/main
-   dv worktree add feature-branch
-   # Creates new worktree and starts devcontainer automatically
+   cd repo
+   dv branch add feature-branch
+   # Creates a local clone and starts the devcontainer
    ```
 
-3. **Switch between worktrees:**
+3. **Enter a container:**
    ```bash
-   cd repo/feature-branch
-   # Or use dv go to target a specific worktree
-   dv go feature-branch
+   dv go main
+   # Or enter with a shell instead of the dev command:
+   dv go main --shell
    ```
 
-4. **View all worktrees:**
+4. **View all branches:**
    ```bash
-   dv worktree list
-   # Shows all worktrees with container status
+   dv branch list
+   # Shows all branch directories with container status
    ```
 
 5. **Check current status:**
    ```bash
-   dv status
-   # Shows current worktree, branch, and container status
+   dv status main
    ```
 
-### Project Structure with Worktrees
-
-```
-project-name/
-├── .bare/              # Bare git repository
-├── main/               # Main branch worktree (with devcontainer)
-├── feature-123/        # Feature branch worktree (with devcontainer)
-└── bugfix-456/         # Another worktree (with devcontainer)
-```
-
-Each worktree gets its own isolated devcontainer, allowing you to:
-- Work on multiple branches without switching
-- Run different versions simultaneously
-- Test features independently
-- Keep separate node_modules per branch
-
-### Working with Worktrees
-
-The `dv` command supports optional worktree arguments on most commands, allowing you to target any worktree from the project root:
-
-```bash
-# Target specific worktrees without changing directory
-dv go feature-123               # Enter feature-123 worktree
-dv up main                      # Start main worktree
-dv down bugfix-42               # Stop bugfix-42 worktree
-dv exec feature-123 -- npm test # Run tests in specific worktree
-
-# Interactive selection when ambiguous
-cd project-root
-dv go                    # Prompts to select from available worktrees
-
-# Still works from within worktrees
-cd project-root/feature-123
-dv go                    # Uses current worktree (feature-123)
-```
-
-**When no worktree is specified:**
-- Uses current directory if you're in a worktree
-- Prompts for selection if multiple worktrees exist at project root
-- Uses current directory for non-worktree projects
-
-For more details, run `dv --help` or `dv <command> --help`.
-
 ## The `dv` Command
-
-The `dv` command is a unified devcontainer management tool with worktree support.
 
 ### Basic Commands
 
 ```bash
-dv up                  # Start devcontainer (local dotfiles)
-dv up --dotfile        # Start devcontainer (GitHub dotfiles)
-dv go                  # Enter container and run dev
-dv go --shell          # Open interactive shell
-dv down                # Stop and remove container
-dv exec <command>      # Run command in container
+dv up [branch]         # Start devcontainer
+dv up --select         # Start devcontainer (interactive selection)
+dv go [branch]         # Enter container and run dev
+dv go [branch] --shell # Open interactive shell
+dv down [branch]       # Stop and remove container
+dv exec [branch] -- <command>  # Run command in container
 ```
 
-### Worktree Commands
+### Branch Directory Commands
 
 ```bash
-dv clone <url> [name]            # Clone as bare repo with worktrees
-dv worktree add <branch>         # Create worktree and start container
-dv worktree list                 # List all worktrees
-dv worktree remove <branch>      # Remove worktree and container
-dv status                        # Show current worktree status
+dv branch add <branch>          # Create branch directory (fast local clone)
+dv branch add <branch> --clone  # Create with full git clone from remote
+dv branch add <branch> --no-start  # Create without starting container
+dv branch list                  # List all branch directories with status
+dv branch remove <branch>       # Remove branch directory and stop container
+dv branch remove --select       # Interactive selection
 ```
+
+### Other Commands
+
+```bash
+dv clone <url> [name]           # Clone repository as branch directory project
+dv status [branch]              # Show branch/container status
+dv template <branch> <image>    # Create .devcontainer/devcontainer.json
+```
+
+The `dv template` command accepts these built-in image aliases:
+
+| Alias       | Image URI                                                       |
+|-------------|-----------------------------------------------------------------|
+| `node22`    | `mcr.microsoft.com/devcontainers/typescript-node:22-bookworm`  |
+| `node`      | `mcr.microsoft.com/devcontainers/typescript-node:24-trixie`    |
+| `python`    | `mcr.microsoft.com/devcontainers/python:1-3.12-bookworm`       |
+| `java`      | `mcr.microsoft.com/devcontainers/java:1-21-bookworm`           |
+| `universal` | `mcr.microsoft.com/devcontainers/universal:2-linux`            |
+| `base`      | `mcr.microsoft.com/devcontainers/base:1-bookworm`              |
+
+To use a custom image, specify the full URI directly in `.devcontainer/devcontainer.json`.
 
 ### Aliases
 
-The following shortcuts are available:
-- `dv wt` = `dv worktree`
-- `dv st` = `dv status`
+- `dv branch` = `dv br`
+- `dv status` = `dv st`
 
-## Available Commands (Legacy)
+## Workflow Examples
 
-After adding `host/bin` to your PATH, the following legacy commands are still available for backwards compatibility:
+### Starting a new project
 
-```terminal
-# Starts a dev container instance on the current working directory.
-alias dup="devcontainer up \
-    --workspace-folder . \
-    --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
-    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
-    --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts,readonly \
-    --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-    --remote-env OPENAI_API_KEY=${OPENAI_API_KEY} \
-    --remote-env PREFER_OPENCODE=${PREFER_OPENCODE:-false} \
-    --update-remote-user-uid-default on"
+```bash
+dv clone git@github.com:user/repo.git
+cd repo
+dv up main
+dv go main
+```
 
-# Starts a dev container instance on the current working directory, and
-# removes the old container if it exists
-alias dup-reset="devcontainer up \
-    --workspace-folder . \
-    --dotfiles-repository https://github.com/PercyODI/devpod-dotfile \
-    --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
-    --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts,readonly \
-    --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-    --remote-env OPENAI_API_KEY=${OPENAI_API_KEY} \
-    --remote-env PREFER_OPENCODE=${PREFER_OPENCODE:-false} \
-    --update-remote-user-uid-default on \
-    --remove-existing-container"
+### Working on multiple features
 
-# Starts a dev container instance using local dotfiles repo
-alias dup-local=" \
-    devcontainer up \
-        --workspace-folder . \
-        --mount type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent \
-        --mount type=bind,source=${HOME}/.ssh/known_hosts,target=/ssh/known_hosts \
-        --mount type=bind,source=${DOTFILES_DIR:-${HOME}/github/devpod-dotfile},target=/dotfiles \
-        --update-remote-user-uid-default on \
-        --remove-existing-container &&
-    devcontainer exec \
-        --workspace-folder . \
-        --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-        --remote-env OPENAI_API_KEY=${OPENAI_API_KEY} \
-        --remote-env PREFER_OPENCODE=${PREFER_OPENCODE:-false} \
-        -- bash -c 'cd /dotfiles && ./install.sh'"
+```bash
+cd repo
+dv branch add feature-auth
+dv branch add feature-ui
 
-# SSH into the dev container and auto-launch tmux dev command
-alias dgo="devcontainer exec \
-    --workspace-folder . \
-    --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-    --remote-env OPENAI_API_KEY=${OPENAI_API_KEY} \
-    --remote-env PREFER_OPENCODE=${PREFER_OPENCODE:-false} \
-    --remote-env GIT_AUTHOR_NAME=\"${GIT_USER_NAME}\" \
-    --remote-env GIT_AUTHOR_EMAIL=\"${GIT_USER_EMAIL}\" \
-    --remote-env GIT_COMMITTER_NAME=\"${GIT_USER_NAME}\" \
-    --remote-env GIT_COMMITTER_EMAIL=\"${GIT_USER_EMAIL}\" \
-    zsh -ic dev"
+dv up feature-auth
+dv up feature-ui
 
-# SSH into the dev container
-alias dgo-shell="devcontainer exec \
-    --workspace-folder . \
-    --remote-env ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY} \
-    --remote-env OPENAI_API_KEY=${OPENAI_API_KEY} \
-    --remote-env PREFER_OPENCODE=${PREFER_OPENCODE:-false} \
-    --remote-env GIT_AUTHOR_NAME=\"${GIT_USER_NAME}\" \
-    --remote-env GIT_AUTHOR_EMAIL=\"${GIT_USER_EMAIL}\" \
-    --remote-env GIT_COMMITTER_NAME=\"${GIT_USER_NAME}\" \
-    --remote-env GIT_COMMITTER_EMAIL=\"${GIT_USER_EMAIL}\" \
-    zsh"
-    
-# Create a base Typescript/Node .devcontainer 
-alias dtemp-node=" \
-  devcontainer templates apply \
-    -t ghcr.io/devcontainers/templates/typescript-node:4.0.2 \
-    --omit-paths '[\".github/\*\"]'"
+dv go feature-auth   # switch between them
+dv go feature-ui
+
+dv branch list       # view all branches
+```
+
+### Cleaning up
+
+```bash
+dv down feature-auth                # stop container
+dv branch remove feature-auth       # remove branch directory (also stops container)
+```
+
+## Troubleshooting
+
+### Command not found
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc:
+export PATH="$HOME/.local/bin:$PATH"
+
+# Then reload:
+source ~/.bashrc
+```
+
+### Container won't start
+
+```bash
+dv status
+
+# View docker logs
+docker logs $(docker ps -aq --filter "label=devcontainer.local_folder=$(pwd)")
+
+# Try recreating
+dv down
+dv up
+```
+
+### Getting help
+
+```bash
+dv --help              # Main help
+dv up --help           # Command-specific help
+dv branch --help       # Subcommand help
 ```
