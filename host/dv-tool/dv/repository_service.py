@@ -119,10 +119,11 @@ class RepositoryService:
         # Create parent directory
         project_dir.mkdir(parents=True, exist_ok=True)
 
-        # Clone into subdirectory named after default branch
+        # Create outer workspace dir, then clone into inner repo dir named after project
         branch_dir = project_dir / default_branch
+        branch_dir.mkdir()
         subprocess.run(
-            ["git", "clone", url, str(branch_dir)],
+            ["git", "clone", url, str(branch_dir / name)],
             check=True,
         )
 
