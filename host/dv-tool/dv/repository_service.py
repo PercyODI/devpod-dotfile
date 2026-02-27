@@ -184,7 +184,7 @@ class RepositoryService:
 
         # Start container if requested
         if start_container:
-            self.devcontainer_service.up(workspace_path, use_external_dotfiles)
+            self.devcontainer_service.up(workspace_path, project.path, use_external_dotfiles)
 
         return BranchAddResult(
             branch_path=workspace_path,

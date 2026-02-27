@@ -115,7 +115,7 @@ def up(config: Config, workspace: Optional[str], dotfile: bool, select: bool) ->
 
     # Run devcontainer up
     try:
-        service.up(workspace_path, use_external_dotfiles=dotfile)
+        service.up(workspace_path, project.path, use_external_dotfiles=dotfile)
         success(
             f"Devcontainer started with {'external' if dotfile else 'local'} dotfiles"
         )
