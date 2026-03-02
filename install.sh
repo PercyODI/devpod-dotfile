@@ -159,45 +159,11 @@ link_configs() {
 }
 
 # ---------------------------
-# nvim shared data volume
-# ---------------------------
-link_nvim_data() {
-  local shared_dir="/nvim-data"
-  local nvim_data_dir="${HOME}/.local/share/nvim"
-
-  if [[ ! -d "$shared_dir" ]]; then
-    log "WARN  /nvim-data not mounted. Skipping nvim data link."
-    return 0
-  fi
-
-  mkdir -p "${HOME}/.local/share"
-
-  if [[ -d "$nvim_data_dir" && ! -L "$nvim_data_dir" ]]; then
-    local backup="${nvim_data_dir}.bak.$(date +%Y%m%d%H%M%S)"
-    log "INFO  Backing up existing nvim data: $nvim_data_dir -> $backup"
-    mv "$nvim_data_dir" "$backup"
-  fi
-
-  if [[ -L "$nvim_data_dir" ]]; then
-    rm -f "$nvim_data_dir"
-  fi
-
-  ln -sf "$shared_dir" "$nvim_data_dir"
-  log "INFO  Linked nvim data: $nvim_data_dir -> $shared_dir"
-}
-
-# ---------------------------
 # LazyVim bootstrap
 # ---------------------------
 lazyvim_sync() {
   if ! have nvim; then
     log "WARN  nvim not found; skipping Lazy sync"
-    return 0
-  fi
-
-  local lazy_plugins_dir="${HOME}/.local/share/nvim/lazy"
-  if [[ -d "$lazy_plugins_dir" ]] && [[ -n "$(ls -A "$lazy_plugins_dir" 2>/dev/null)" ]]; then
-    log "INFO  LazyVim plugins already installed, skipping sync"
     return 0
   fi
 
@@ -603,7 +569,6 @@ main() {
   fi
 
   run_step "ensure_fd_shim" ensure_fd_shim
-  run_step "link_nvim_data" link_nvim_data
   run_step "install_oh_my_zsh" install_oh_my_zsh
   run_step "link_nvim_zsh_lazygit_and_tmux_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
