@@ -167,8 +167,63 @@ lazyvim_sync() {
     return 0
   fi
 
-  # Don't fail the entire bootstrap if plugins have transient issues
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  local lockfile="${script_dir}/nvim/lazy-lock.json"
+
+  local cache_dir="/nvim-data"
+  local cache_tar="${cache_dir}/nvim-data.tar"
+  local cache_hash_file="${cache_dir}/lazy-lock.hash"
+  local nvim_data_dir="${HOME}/.local/share/nvim"
+
+  # Attempt to restore from host cache
+  if [[ -d "$cache_dir" ]] && [[ -f "$lockfile" ]]; then
+    local current_hash
+    current_hash="$(sha256sum "$lockfile" | cut -d' ' -f1)"
+    local cached_hash=""
+    if [[ -f "$cache_hash_file" ]]; then
+      cached_hash="$(cat "$cache_hash_file")"
+    fi
+
+    if [[ "$current_hash" == "$cached_hash" ]] && [[ -s "$cache_tar" ]]; then
+      log "INFO  Restoring nvim data from host cache"
+      mkdir -p "$nvim_data_dir"
+      rm -rf "$nvim_data_dir/lazy" "$nvim_data_dir/mason"
+      tar xf "$cache_tar" -C "$nvim_data_dir"
+      log "INFO  nvim data restored from host cache"
+      return 0
+    fi
+
+    log "INFO  Host cache miss — running LazyVim sync"
+  fi
+
+  # Cache absent or stale: run full sync
   nvim --headless "+Lazy! sync" +qa || true
+
+  # Write back to host cache
+  if [[ -d "$cache_dir" ]] && [[ -d "$nvim_data_dir" ]]; then
+    # Docker named volumes default to root ownership; fix so current user can write
+    if [[ ! -w "$cache_dir" ]]; then
+      sudo chown "$(id -u):$(id -g)" "$cache_dir" 2>/dev/null || true
+    fi
+
+    if [[ -w "$cache_dir" ]]; then
+      local tar_args=()
+      [[ -d "$nvim_data_dir/lazy" ]] && tar_args+=("lazy")
+      [[ -d "$nvim_data_dir/mason" ]] && tar_args+=("mason")
+
+      if [[ ${#tar_args[@]} -gt 0 ]]; then
+        log "INFO  Saving nvim data to host cache"
+        tar cf "$cache_tar" -C "$nvim_data_dir" "${tar_args[@]}"
+        if [[ -f "$lockfile" ]]; then
+          sha256sum "$lockfile" | cut -d' ' -f1 >"$cache_hash_file"
+        fi
+        log "INFO  nvim data saved to host cache"
+      fi
+    else
+      log "WARN  /nvim-data not writable; skipping cache save"
+    fi
+  fi
 }
 
 # ---------------------------

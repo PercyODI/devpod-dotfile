@@ -1,6 +1,7 @@
 """Devcontainer lifecycle service layer."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -8,6 +9,12 @@ from typing import Optional
 from .config import Config
 from .container import Container, ContainerStatus
 from .utils import console
+
+
+def _volume_name(project_path: Path) -> str:
+    """Derive a Docker-safe volume name suffix from the project directory name."""
+    sanitized = re.sub(r"[^a-zA-Z0-9_.-]", "-", project_path.name)
+    return sanitized
 
 
 class DevcontainerService:
@@ -34,8 +41,6 @@ class DevcontainerService:
         Returns:
             Complete command list for devcontainer up
         """
-        (project_path / ".dv" / "nvim-data").mkdir(parents=True, exist_ok=True)
-
         apt_packages = [
             "git",
             "curl",
@@ -74,7 +79,7 @@ class DevcontainerService:
             "--mount",
             f"type=bind,source={Path.home()}/.ssh/known_hosts,target=/ssh/known_hosts",
             "--mount",
-            f"type=bind,source={project_path / '.dv' / 'nvim-data'},target=/nvim-data",
+            f"type=volume,source=dv-nvim-{_volume_name(project_path)},target=/nvim-data",
             "--update-remote-user-uid-default",
             "on",
             "--remove-existing-container",
