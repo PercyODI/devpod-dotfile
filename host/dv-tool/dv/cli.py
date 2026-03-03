@@ -13,7 +13,7 @@ from rich.table import Table
 
 from . import __version__
 from .config import Config
-from .container import Container
+from .container import Container, ContainerStatus
 from .devcontainer_service import DevcontainerService
 from .repository_service import RepositoryService
 from .utils import (
@@ -147,6 +147,22 @@ def go(config: Config, workspace: Optional[str], shell: bool, select: bool) -> N
     # Resolve workspace
     workspace_path = _resolve_branch_with_selection(project, workspace, select)
 
+    # Check if container is running; offer to start it if not
+    container = Container(workspace_path)
+    if container.get_status() != ContainerStatus.RUNNING:
+        console.print(
+            f"[yellow]Container for [cyan]{workspace_path.name}[/cyan] is not running.[/yellow]"
+        )
+        if not Confirm.ask("Start it now?", default=True):
+            error("Container is not running")
+            sys.exit(1)
+        try:
+            service.up(workspace_path, project.path, use_external_dotfiles=False)
+            success("Devcontainer started with local dotfiles")
+        except subprocess.CalledProcessError as e:
+            error(f"Failed to start devcontainer: {e}")
+            sys.exit(1)
+
     # Determine command to run
     if shell:
         command = ["zsh"]
@@ -164,19 +180,43 @@ def go(config: Config, workspace: Optional[str], shell: bool, select: bool) -> N
 @click.argument("workspace", required=False)
 @click.option("--select", is_flag=True, help="Force interactive workspace selection")
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
+@click.option("--all", "all_workspaces", is_flag=True, help="Stop all containers for the current project")
 @pass_config
-def down(config: Config, workspace: Optional[str], select: bool, force: bool) -> None:
+def down(config: Config, workspace: Optional[str], select: bool, force: bool, all_workspaces: bool) -> None:
     """Stop and remove the devcontainer.
 
     If no workspace is specified, interactive selection is used.
 
     Examples:
-        dv down             # Interactive selection
-        dv down main        # Stop main workspace (with confirmation)
-        dv down main --force # Stop without confirmation
+        dv down               # Interactive selection
+        dv down main          # Stop main workspace (with confirmation)
+        dv down main --force  # Stop without confirmation
+        dv down --all         # Stop all containers for the project
+        dv down --all --force # Stop all without confirmation
     """
     project = Project()
-    service = DevcontainerService(config)
+
+    if all_workspaces:
+        workspaces = project.list_workspaces()
+        if not workspaces:
+            warning("No workspaces found")
+            return
+
+        stopped = 0
+        for ws in workspaces:
+            container = Container(ws.path)
+            console.print(f"Stopping devcontainer in: [cyan]{ws.name}[/cyan]")
+            if container.stop(force=force):
+                success(f"Devcontainer stopped and removed: {ws.name}")
+                stopped += 1
+            else:
+                console.print(f"[dim]No container running for: {ws.name}[/dim]")
+
+        if stopped:
+            success(f"Stopped {stopped} container(s)")
+        else:
+            warning("No running containers found")
+        return
 
     # Resolve workspace
     workspace_path = _resolve_branch_with_selection(project, workspace, select)
@@ -317,6 +357,9 @@ def clone(config: Config, url: str, name: Optional[str]) -> None:
 def workspace() -> None:
     """Manage workspaces and their devcontainers."""
     pass
+
+
+main.add_command(workspace, name="ws")
 
 
 @workspace.command("add")
