@@ -1,6 +1,7 @@
 """Devcontainer lifecycle service layer."""
 
 import json
+import platform
 import re
 import subprocess
 from pathlib import Path
@@ -41,6 +42,20 @@ class DevcontainerService:
         Returns:
             Complete command list for devcontainer up
         """
+        if not self.config.ssh_auth_sock:
+            if platform.system() == "Windows":
+                raise RuntimeError(
+                    "dv must be run from within WSL2 on Windows, not from PowerShell or cmd.\n"
+                    "Install WSL2: https://learn.microsoft.com/en-us/windows/wsl/install\n"
+                    "Once in WSL2, run: eval $(ssh-agent) && ssh-add ~/.ssh/id_ed25519"
+                )
+            raise RuntimeError(
+                "No SSH agent socket found (SSH_AUTH_SOCK is not set).\n"
+                "Start ssh-agent and add your key:\n"
+                "  eval $(ssh-agent)\n"
+                "  ssh-add ~/.ssh/id_ed25519"
+            )
+
         apt_packages = [
             "git",
             "curl",
@@ -75,9 +90,7 @@ class DevcontainerService:
             "--workspace-folder",
             str(workspace_path),
             "--mount",
-            "type=bind,source=/run/host-services/ssh-auth.sock,target=/ssh/agent",
-            "--mount",
-            f"type=bind,source={Path.home()}/.ssh/known_hosts,target=/ssh/known_hosts",
+            f"type=bind,source={self.config.ssh_auth_sock},target=/ssh/agent",
             "--mount",
             f"type=volume,source=dv-nvim-{_volume_name(project_path)},target=/nvim-data",
             "--update-remote-user-uid-default",
@@ -86,6 +99,13 @@ class DevcontainerService:
             "--additional-features",
             additional_features,
         ]
+
+        known_hosts = Path.home() / ".ssh" / "known_hosts"
+        if known_hosts.exists():
+            cmd.extend([
+                "--mount",
+                f"type=bind,source={known_hosts},target=/ssh/known_hosts",
+            ])
 
         # Add remote env args
         cmd.extend(self.config.get_remote_env_args())

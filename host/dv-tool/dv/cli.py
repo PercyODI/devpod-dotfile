@@ -119,7 +119,7 @@ def up(config: Config, workspace: Optional[str], dotfile: bool, select: bool) ->
         success(
             f"Devcontainer started with {'external' if dotfile else 'local'} dotfiles"
         )
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, RuntimeError) as e:
         error(f"Failed to start devcontainer: {e}")
         sys.exit(1)
 
@@ -159,7 +159,7 @@ def go(config: Config, workspace: Optional[str], shell: bool, select: bool) -> N
         try:
             service.up(workspace_path, project.path, use_external_dotfiles=False)
             success("Devcontainer started with local dotfiles")
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, RuntimeError) as e:
             error(f"Failed to start devcontainer: {e}")
             sys.exit(1)
 

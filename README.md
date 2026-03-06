@@ -21,12 +21,36 @@ git clone https://github.com/PercyODI/devpod-dotfile.git ~/github/devpod-dotfile
 - Modern terminal (Wezterm, kitty, warp, iterm2, etc)
 - Python 3.9+
 
+### Windows (WSL2)
+
+Native Windows (PowerShell, cmd, Git Bash) is **not supported**. `dv` must be run from within WSL2.
+
+1. Install WSL2: https://learn.microsoft.com/en-us/windows/wsl/install
+2. Inside WSL2, follow the standard Linux setup steps below.
+
+**SSH agent in WSL2:** The SSH agent does not start automatically in WSL2. Add to your `~/.bashrc` or `~/.zshrc`:
+
+```bash
+if [ -z "$SSH_AUTH_SOCK" ]; then
+  eval $(ssh-agent -s) > /dev/null
+fi
+```
+
+Optionally, to bridge the Windows SSH agent into WSL2, see [npiperelay](https://github.com/jstarks/npiperelay).
+
 ### SSH Keys
 
-In order to use git via ssh, you must have the SSH Keys added to the keychain on the host. For example:
+In order to use git via ssh, you must have SSH keys added to the agent on the host. For example:
 
-```
+```bash
 ssh-add ~/.ssh/github_id_ed25519
+```
+
+On **WSL2**, start the agent first if needed:
+
+```bash
+eval $(ssh-agent)
+ssh-add ~/.ssh/id_ed25519
 ```
 
 ### Environment Variables
