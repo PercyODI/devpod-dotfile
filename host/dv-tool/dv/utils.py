@@ -179,7 +179,7 @@ def list_remote_branches(project: "Project") -> list[str]:
         List of remote branch names
     """
     primary_branch = project.get_primary_branch()
-    primary_path = project.path / primary_branch
+    primary_path = project.path / primary_branch / project.path.name
 
     # Fetch latest
     subprocess.run(

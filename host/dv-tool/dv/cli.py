@@ -13,7 +13,7 @@ from rich.table import Table
 
 from . import __version__
 from .config import Config
-from .container import Container
+from .container import Container, ContainerStatus
 from .devcontainer_service import DevcontainerService
 from .repository_service import RepositoryService
 from .utils import (
@@ -78,8 +78,7 @@ def _resolve_branch_with_selection(
 def main(ctx: click.Context, version: bool) -> None:
     """Devcontainer management tool for git workspace directories."""
     # Load configuration
-    config_file = Path.home() / ".config" / "dv" / "config.yml"
-    ctx.obj = Config.from_file(config_file)
+    ctx.obj = Config.from_env()
 
     if version:
         click.echo(f"dv version {__version__}")
@@ -116,11 +115,11 @@ def up(config: Config, workspace: Optional[str], dotfile: bool, select: bool) ->
 
     # Run devcontainer up
     try:
-        service.up(workspace_path, use_external_dotfiles=dotfile)
+        service.up(workspace_path, project.path, use_external_dotfiles=dotfile)
         success(
             f"Devcontainer started with {'external' if dotfile else 'local'} dotfiles"
         )
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, RuntimeError) as e:
         error(f"Failed to start devcontainer: {e}")
         sys.exit(1)
 
@@ -148,6 +147,22 @@ def go(config: Config, workspace: Optional[str], shell: bool, select: bool) -> N
     # Resolve workspace
     workspace_path = _resolve_branch_with_selection(project, workspace, select)
 
+    # Check if container is running; offer to start it if not
+    container = Container(workspace_path)
+    if container.get_status() != ContainerStatus.RUNNING:
+        console.print(
+            f"[yellow]Container for [cyan]{workspace_path.name}[/cyan] is not running.[/yellow]"
+        )
+        if not Confirm.ask("Start it now?", default=True):
+            error("Container is not running")
+            sys.exit(1)
+        try:
+            service.up(workspace_path, project.path, use_external_dotfiles=False)
+            success("Devcontainer started with local dotfiles")
+        except (subprocess.CalledProcessError, RuntimeError) as e:
+            error(f"Failed to start devcontainer: {e}")
+            sys.exit(1)
+
     # Determine command to run
     if shell:
         command = ["zsh"]
@@ -165,19 +180,43 @@ def go(config: Config, workspace: Optional[str], shell: bool, select: bool) -> N
 @click.argument("workspace", required=False)
 @click.option("--select", is_flag=True, help="Force interactive workspace selection")
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
+@click.option("--all", "all_workspaces", is_flag=True, help="Stop all containers for the current project")
 @pass_config
-def down(config: Config, workspace: Optional[str], select: bool, force: bool) -> None:
+def down(config: Config, workspace: Optional[str], select: bool, force: bool, all_workspaces: bool) -> None:
     """Stop and remove the devcontainer.
 
     If no workspace is specified, interactive selection is used.
 
     Examples:
-        dv down             # Interactive selection
-        dv down main        # Stop main workspace (with confirmation)
-        dv down main --force # Stop without confirmation
+        dv down               # Interactive selection
+        dv down main          # Stop main workspace (with confirmation)
+        dv down main --force  # Stop without confirmation
+        dv down --all         # Stop all containers for the project
+        dv down --all --force # Stop all without confirmation
     """
     project = Project()
-    service = DevcontainerService(config)
+
+    if all_workspaces:
+        workspaces = project.list_workspaces()
+        if not workspaces:
+            warning("No workspaces found")
+            return
+
+        stopped = 0
+        for ws in workspaces:
+            container = Container(ws.path)
+            console.print(f"Stopping devcontainer in: [cyan]{ws.name}[/cyan]")
+            if container.stop(force=force):
+                success(f"Devcontainer stopped and removed: {ws.name}")
+                stopped += 1
+            else:
+                console.print(f"[dim]No container running for: {ws.name}[/dim]")
+
+        if stopped:
+            success(f"Stopped {stopped} container(s)")
+        else:
+            warning("No running containers found")
+        return
 
     # Resolve workspace
     workspace_path = _resolve_branch_with_selection(project, workspace, select)
@@ -320,18 +359,24 @@ def workspace() -> None:
     pass
 
 
+main.add_command(workspace, name="ws")
+
+
 @workspace.command("add")
 @click.option("--start", is_flag=True, help="Automatically start devcontainer after creation")
 @click.option("--clone", is_flag=True, help="Use full git clone instead of copying primary workspace")
 @click.option("--branch", "-b", help="Git branch name (skip wizard)")
 @click.option("--name", "-n", help="Workspace name (skip wizard)")
+@click.option("--local", "is_local", is_flag=True,
+              help="Create a local workspace not tied to a remote branch (skipped by dv clean)")
 @pass_config
 def workspace_add(
     config: Config,
     start: bool,
     clone: bool,
     branch: Optional[str],
-    name: Optional[str]
+    name: Optional[str],
+    is_local: bool,
 ) -> None:
     """Create a new workspace (interactive wizard).
 
@@ -340,6 +385,7 @@ def workspace_add(
         dv workspace add -b feature/sc-123 -n task1   # Skip wizard
         dv workspace add --start                      # Create and start
         dv workspace add --clone                      # Use full git clone
+        dv workspace add --local -n scratch           # Local workspace (not cleaned up)
     """
     project = Project()
     service = RepositoryService(config)
@@ -349,24 +395,34 @@ def workspace_add(
         console.print("Run 'dv clone <url>' to set up a new project.")
         sys.exit(1)
 
-    # Step 1: Get git branch name (wizard or option)
-    if branch:
-        git_branch = branch
+    if is_local:
+        # Local workspace: no branch selection, copied from primary as-is
+        git_branch = ""
+        if name:
+            workspace_name = name
+        else:
+            workspace_name = prompt_for_workspace_name("local")
+        console.print(f"[bold]Workspace name:[/bold] [cyan]{workspace_name}[/cyan]")
+        console.print(f"[dim]Local workspace (copied from primary, skipped by dv clean)[/dim]")
     else:
-        git_branch = select_or_enter_branch(project)
+        # Step 1: Get git branch name (wizard or option)
+        if branch:
+            git_branch = branch
+        else:
+            git_branch = select_or_enter_branch(project)
 
-    console.print(f"\n[bold]Git branch:[/bold] [cyan]{git_branch}[/cyan]")
+        console.print(f"\n[bold]Git branch:[/bold] [cyan]{git_branch}[/cyan]")
 
-    # Step 2: Get workspace name (wizard or option)
-    if name:
-        workspace_name = name
-    else:
-        default_name = project._generate_default_workspace_name(git_branch)
-        workspace_name = prompt_for_workspace_name(default_name)
+        # Step 2: Get workspace name (wizard or option)
+        if name:
+            workspace_name = name
+        else:
+            default_name = project._generate_default_workspace_name(git_branch)
+            workspace_name = prompt_for_workspace_name(default_name)
 
-    console.print(f"[bold]Workspace name:[/bold] [cyan]{workspace_name}[/cyan]")
+        console.print(f"[bold]Workspace name:[/bold] [cyan]{workspace_name}[/cyan]")
 
-    # Step 3: Create the workspace
+    # Create the workspace
     console.print(f"\n[dim]Creating workspace...[/dim]")
 
     try:
@@ -377,11 +433,16 @@ def workspace_add(
             start_container=start,
             use_external_dotfiles=False,
             use_git_clone=clone,
+            local=is_local,
         )
 
         success(f"Workspace created at: {result.branch_path}")
-        console.print(f"  Git branch: [green]{git_branch}[/green]")
-        console.print(f"  Workspace:  [cyan]{workspace_name}[/cyan]")
+        if is_local:
+            console.print(f"  Workspace:  [cyan]{workspace_name}[/cyan]")
+            console.print(f"  Type:       [dim]local[/dim]")
+        else:
+            console.print(f"  Git branch: [green]{git_branch}[/green]")
+            console.print(f"  Workspace:  [cyan]{workspace_name}[/cyan]")
 
         if start:
             success("Devcontainer started with local dotfiles")
@@ -415,13 +476,16 @@ def workspace_list() -> None:
     table.add_column("Status", width=12)
     table.add_column("Workspace", style="cyan")
     table.add_column("Git Branch", style="green")
+    table.add_column("Local", width=7)
     table.add_column("Path", style="dim")
 
     for ws in workspaces:
         status_str = (
             f"[{ws.status.color}]{ws.status.icon}[/{ws.status.color}] {ws.status.value}"
         )
-        table.add_row(status_str, ws.name, ws.branch, str(ws.path))
+        branch_str = ws.branch if not ws.local else "[dim]—[/dim]"
+        local_str = "[yellow]yes[/yellow]" if ws.local else "[dim]—[/dim]"
+        table.add_row(status_str, ws.name, branch_str, local_str, str(ws.path))
 
     console.print(table)
 
@@ -512,13 +576,16 @@ def status(config: Config, workspace: Optional[str]) -> None:
         table.add_column("Status", width=12)
         table.add_column("Workspace", style="cyan")
         table.add_column("Git Branch", style="green")
+        table.add_column("Local", width=7)
         table.add_column("Path", style="dim")
 
         for ws in workspaces:
             status_str = (
                 f"[{ws.status.color}]{ws.status.icon}[/{ws.status.color}] {ws.status.value}"
             )
-            table.add_row(status_str, ws.name, ws.branch, str(ws.path))
+            branch_str = ws.branch if not ws.local else "[dim]—[/dim]"
+            local_str = "[yellow]yes[/yellow]" if ws.local else "[dim]—[/dim]"
+            table.add_row(status_str, ws.name, branch_str, local_str, str(ws.path))
 
         console.print(table)
     else:
@@ -546,6 +613,66 @@ def status(config: Config, workspace: Optional[str]) -> None:
         except ValueError as e:
             error(str(e))
             sys.exit(1)
+
+
+@main.command()
+@click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
+@click.option("--dry-run", is_flag=True, help="Show what would be removed without removing")
+def clean(force: bool, dry_run: bool) -> None:
+    """Remove workspaces whose remote branches no longer exist.
+
+    Fetches latest remote branch info, lists all stale workspaces, then asks
+    for confirmation once before removing all of them. Workspaces created with
+    --local are never removed.
+
+    Examples:
+        dv clean            # List stale workspaces, confirm once, then remove all
+        dv clean --force    # Remove without confirmation
+        dv clean --dry-run  # Preview only, no changes
+    """
+    project = Project()
+
+    if not project.is_dv_project:
+        error("Not in a DV project")
+        sys.exit(1)
+
+    console.print("[dim]Fetching remote branch info...[/dim]")
+    try:
+        stale = project.get_stale_workspaces()
+    except RuntimeError as e:
+        error(str(e))
+        sys.exit(1)
+
+    if not stale:
+        success("No stale workspaces found")
+        return
+
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Workspace", style="cyan")
+    table.add_column("Branch (deleted from remote)", style="red")
+    for ws_name, branch in stale:
+        branch_display = branch if branch else "[dim]—[/dim]"
+        table.add_row(ws_name, branch_display)
+    console.print(table)
+
+    if dry_run:
+        console.print(f"[yellow]Dry run: {len(stale)} workspace(s) would be removed[/yellow]")
+        return
+
+    if not force:
+        if not Confirm.ask(f"Remove these {len(stale)} workspace(s)?", default=False):
+            console.print("[yellow]Cancelled[/yellow]")
+            return
+
+    for ws_name, _branch in stale:
+        try:
+            workspace_path = project.resolve_workspace(ws_name)
+            container = Container(workspace_path)
+            container.stop(force=True)
+            project.remove_branch_directory(ws_name, force=True)
+            success(f"Removed: {ws_name}")
+        except ValueError as e:
+            error(str(e))
 
 
 @main.command()

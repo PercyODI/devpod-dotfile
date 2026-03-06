@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dv"
-version = "2.0.0"
+version = "2.0.3"
 description = "Devcontainer management tool for git branch directories"
 authors = [{name = "Your Name", email = "you@example.com"}]
 readme = "README.md"
@@ -12,7 +12,6 @@ requires-python = ">=3.9"
 dependencies = [
     "click>=8.1.0",
     "rich>=13.0.0",  # Beautiful terminal output
-    "pyyaml>=6.0",
 ]
 
 [project.scripts]

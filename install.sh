@@ -31,23 +31,6 @@ run_step() {
   log "DONE  $name (marked: $m)"
 }
 
-# ---------------------------
-# Package install (Debian/Ubuntu)
-# ---------------------------
-install_pkgs_debian() {
-  sudo apt-get update -y
-  sudo apt-get install -y \
-    git curl ca-certificates unzip \
-    zsh \
-    ripgrep \
-    fd-find \
-    fzf \
-    jq \
-    build-essential \
-    openssh-client \
-    tmux
-}
-
 # Make `fd` available even if distro uses `fdfind`
 ensure_fd_shim() {
   if have fd; then return 0; fi
@@ -59,71 +42,6 @@ ensure_fd_shim() {
   # If neither exists, don't fail the whole bootstrap
   log "WARN  fd/fdfind not found; skipping fd shim"
   return 0
-}
-
-# ---------------------------
-# Install lazy git
-# ---------------------------
-install_lazygit() {
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp:-}"' RETURN
-
-  local LAZYGIT_VERSION=$(curl -s "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" | \grep -Po '"tag_name": *"v\K[^"]*')
-  curl -Lo "$tmp/lazygit.tar.gz" "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz"
-  tar -xzf "$tmp/lazygit.tar.gz" -C "$tmp" lazygit
-  sudo install "$tmp/lazygit" -D -t /usr/local/bin/
-}
-
-# ---------------------------
-# Neovim install (pinned release)
-# ---------------------------
-install_neovim_release() {
-  local NVIM_VER="0.11.5"
-
-  if have nvim; then
-    return 0
-  fi
-
-  local arch
-  arch="$(uname -m)"
-  case "$arch" in
-  x86_64 | amd64) arch="linux-x86_64" ;;
-  aarch64 | arm64) arch="linux-arm64" ;;
-  *)
-    log "WARN  Unsupported arch for nvim release tarball: $(uname -m). Skipping nvim install."
-    return 0
-    ;;
-  esac
-
-  local tmp
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp:-}"' RETURN
-
-  curl -fsSL -o "$tmp/nvim.tar.gz" \
-    "https://github.com/neovim/neovim/releases/download/v${NVIM_VER}/nvim-${arch}.tar.gz"
-
-  tar -C "$tmp" -xzf "$tmp/nvim.tar.gz"
-
-  # Directory names in official artifacts:
-  # - linux64 -> nvim-linux-x86_64
-  # - linuxarm64 -> nvim-linux-arm64
-  local extracted="nvim-${arch}"
-  local extracted_dir="$tmp/$extracted"
-
-  if [[ ! -d "$extracted_dir" ]]; then
-    # fallback to common names if artifact naming differs
-    extracted_dir="$(find "$tmp" -maxdepth 1 -type d -name 'nvim-linux*' | head -n1 || true)"
-  fi
-
-  if [[ -z "${extracted_dir:-}" || ! -d "$extracted_dir" ]]; then
-    log "WARN  Could not find extracted nvim dir; skipping nvim install."
-    return 0
-  fi
-
-  sudo rm -rf /opt/nvim
-  sudo mv "$extracted_dir" /opt/nvim
-  sudo ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim
 }
 
 # ---------------------------
@@ -241,6 +159,74 @@ link_configs() {
 }
 
 # ---------------------------
+# LazyVim bootstrap
+# ---------------------------
+lazyvim_sync() {
+  if ! have nvim; then
+    log "WARN  nvim not found; skipping Lazy sync"
+    return 0
+  fi
+
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  local lockfile="${script_dir}/nvim/lazy-lock.json"
+
+  local cache_dir="/nvim-data"
+  local cache_tar="${cache_dir}/nvim-data.tar"
+  local cache_hash_file="${cache_dir}/lazy-lock.hash"
+  local nvim_data_dir="${HOME}/.local/share/nvim"
+
+  # Attempt to restore from host cache
+  if [[ -d "$cache_dir" ]] && [[ -f "$lockfile" ]]; then
+    local current_hash
+    current_hash="$(sha256sum "$lockfile" | cut -d' ' -f1)"
+    local cached_hash=""
+    if [[ -f "$cache_hash_file" ]]; then
+      cached_hash="$(cat "$cache_hash_file")"
+    fi
+
+    if [[ "$current_hash" == "$cached_hash" ]] && [[ -s "$cache_tar" ]]; then
+      log "INFO  Restoring nvim data from host cache"
+      mkdir -p "$nvim_data_dir"
+      rm -rf "$nvim_data_dir/lazy" "$nvim_data_dir/mason"
+      tar xf "$cache_tar" -C "$nvim_data_dir"
+      log "INFO  nvim data restored from host cache"
+      return 0
+    fi
+
+    log "INFO  Host cache miss — running LazyVim sync"
+  fi
+
+  # Cache absent or stale: run full sync
+  nvim --headless "+Lazy! sync" +qa || true
+
+  # Write back to host cache
+  if [[ -d "$cache_dir" ]] && [[ -d "$nvim_data_dir" ]]; then
+    # Docker named volumes default to root ownership; fix so current user can write
+    if [[ ! -w "$cache_dir" ]]; then
+      sudo chown "$(id -u):$(id -g)" "$cache_dir" 2>/dev/null || true
+    fi
+
+    if [[ -w "$cache_dir" ]]; then
+      local tar_args=()
+      [[ -d "$nvim_data_dir/lazy" ]] && tar_args+=("lazy")
+      [[ -d "$nvim_data_dir/mason" ]] && tar_args+=("mason")
+
+      if [[ ${#tar_args[@]} -gt 0 ]]; then
+        log "INFO  Saving nvim data to host cache"
+        tar cf "$cache_tar" -C "$nvim_data_dir" "${tar_args[@]}"
+        if [[ -f "$lockfile" ]]; then
+          sha256sum "$lockfile" | cut -d' ' -f1 >"$cache_hash_file"
+        fi
+        log "INFO  nvim data saved to host cache"
+      fi
+    else
+      log "WARN  /nvim-data not writable; skipping cache save"
+    fi
+  fi
+}
+
+# ---------------------------
 # oh-my-zsh
 # ---------------------------
 install_oh_my_zsh() {
@@ -262,70 +248,6 @@ install_oh_my_zsh() {
 #   fi
 #   return 0
 # }
-
-# ---------------------------
-# LazyVim bootstrap
-# ---------------------------
-lazyvim_sync() {
-  # If nvim isn't present, no-op
-  if ! have nvim; then
-    log "WARN  nvim not found; skipping Lazy sync"
-    return 0
-  fi
-
-  # Don't fail the entire bootstrap if plugins have transient issues
-  nvim --headless "+Lazy! sync" +qa || true
-}
-
-# ---------------------------
-# Claude Code install
-# ---------------------------
-install_claude_code() {
-  if have claude; then
-    log "INFO  Claude Code already installed: $(command -v claude)"
-    return 0
-  fi
-
-  log "INFO  Installing Claude Code..."
-  # Run in non-interactive mode to avoid terminal control sequences
-  curl -fsSL https://claude.ai/install.sh | bash -s -- 2>&1 | cat
-
-  # Ensure ~/.local/bin is in PATH for current session
-  export PATH="${HOME}/.local/bin:${PATH}"
-
-  # Verify installation
-  if ! have claude; then
-    log "WARN  Claude Code installation completed but binary not found in PATH"
-    return 1
-  fi
-
-  log "INFO  Claude Code installed successfully: $(command -v claude)"
-}
-
-# ---------------------------
-# Opencode install
-# ---------------------------
-install_opencode() {
-  if have opencode; then
-    log "INFO  Opencode already installed: $(command -v opencode)"
-    return 0
-  fi
-
-  log "INFO  Installing Opencode..."
-  # Run in non-interactive mode to avoid terminal control sequences
-  curl -fsSL https://opencode.ai/install | bash -s -- 2>&1 | cat
-
-  # Ensure ~/.opencode/bin is in PATH for current session
-  export PATH="${HOME}/.opencode/bin:${PATH}"
-
-  # Verify installation
-  if ! have opencode; then
-    log "WARN  Opencode installation completed but binary not found in PATH"
-    return 1
-  fi
-
-  log "INFO  Opencode installed successfully: $(command -v opencode)"
-}
 
 configure_claude_code() {
   local script_dir
@@ -701,25 +623,11 @@ main() {
     log "WARN  sudo not found. Package installs / /opt installs may fail; continuing with user-level steps."
   fi
 
-  # Install packages only on Debian/Ubuntu (safe guard)
-  if [[ -f /etc/debian_version ]]; then
-    run_step "apt_update_and_install_packages" install_pkgs_debian
-    run_step "ensure_fd_shim" ensure_fd_shim
-  else
-    log "INFO  Non-debian base detected; skipping apt package step"
-  fi
-
-  run_step "install_neovim" install_neovim_release
+  run_step "ensure_fd_shim" ensure_fd_shim
   run_step "install_oh_my_zsh" install_oh_my_zsh
   run_step "link_nvim_zsh_lazygit_and_tmux_configs" link_configs
   # run_step "set_default_shell_zsh" set_default_shell_zsh
-  run_step "install_lazygit" install_lazygit
-
-  # Install Claude Code, Opencode, and LazyVim Plugins in parallel with side-by-side output
-  run_steps_parallel \
-    "install_claude_code" install_claude_code \
-    "install_opencode" install_opencode \
-    "lazyvim_sync_plugins" lazyvim_sync
+  run_step "lazyvim_sync_plugins" lazyvim_sync
 
   run_step "configure_git" configure_git
   run_step "configure_claude_code" configure_claude_code

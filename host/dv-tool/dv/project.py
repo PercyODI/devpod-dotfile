@@ -19,6 +19,7 @@ class WorkspaceMetadata:
 
     git_branch: str
     created_at: str
+    local: bool = False
 
 
 @dataclass
@@ -28,11 +29,12 @@ class BranchInfo:
     path: Path
     branch: str
     status: ContainerStatus
+    local: bool = False
 
     @property
     def name(self) -> str:
-        """Get branch directory name (directory basename)."""
-        return self.path.name
+        """Get workspace directory name (outer workspace dir, parent of the git repo)."""
+        return self.path.parent.name
 
 
 class Project:
@@ -60,7 +62,11 @@ class Project:
             data = json.load(f)
 
         return {
-            workspace_name: WorkspaceMetadata(**meta)
+            workspace_name: WorkspaceMetadata(
+                git_branch=meta['git_branch'],
+                created_at=meta['created_at'],
+                local=meta.get('local', False),
+            )
             for workspace_name, meta in data.get('workspaces', {}).items()
         }
 
@@ -72,15 +78,13 @@ class Project:
         """
         config_path = self._get_config_path()
 
-        data = {
-            'workspaces': {
-                workspace_name: {
-                    'git_branch': meta.git_branch,
-                    'created_at': meta.created_at
-                }
-                for workspace_name, meta in mappings.items()
-            }
-        }
+        workspaces = {}
+        for workspace_name, meta in mappings.items():
+            entry: dict = {'git_branch': meta.git_branch, 'created_at': meta.created_at}
+            if meta.local:
+                entry['local'] = True
+            workspaces[workspace_name] = entry
+        data = {'workspaces': workspaces}
 
         with open(config_path, 'w') as f:
             json.dump(data, f, indent=2)
@@ -175,13 +179,14 @@ class Project:
         else:
             mappings = self._load_config()
 
+        repo_name = search_path.name  # project dir name = repo name
         workspaces = []
         for workspace_name in mappings.keys():
             workspace_path = search_path / workspace_name
-            if workspace_path.is_dir() and self._is_valid_git_repo(workspace_path):
-                workspaces.append(workspace_path)
+            if workspace_path.is_dir() and self._is_valid_git_repo(workspace_path / repo_name):
+                workspaces.append(workspace_path / repo_name)
 
-        return sorted(workspaces, key=lambda p: p.name)
+        return sorted(workspaces, key=lambda p: p.parent.name)
 
     def _is_valid_git_repo(self, path: Path) -> bool:
         """Validate using git rev-parse --git-dir.
@@ -218,7 +223,7 @@ class Project:
         results = []
 
         for workspace_path in workspaces:
-            workspace_name = workspace_path.name
+            workspace_name = workspace_path.parent.name  # outer workspace dir name
 
             # Get git branch from config (required)
             if workspace_name in mappings:
@@ -233,8 +238,9 @@ class Project:
 
             results.append(BranchInfo(
                 path=workspace_path,
-                branch=git_branch,  # Now shows actual git branch name
-                status=status
+                branch=git_branch,
+                status=status,
+                local=mappings[workspace_name].local,
             ))
 
         return results
@@ -266,7 +272,7 @@ class Project:
                 f"Run 'dv workspace list' to see available workspaces."
             )
 
-        candidate = self.path / workspace_name
+        candidate = self.path / workspace_name / self.path.name  # inner git repo path
 
         # Security check: ensure resolved path doesn't escape project directory
         try:
@@ -343,7 +349,7 @@ class Project:
             RuntimeError: If no primary branch or no remote URL found
         """
         primary_branch = self.get_primary_branch()
-        primary_path = self.path / primary_branch
+        primary_path = self.path / primary_branch / self.path.name
 
         try:
             result = subprocess.run(
@@ -360,14 +366,18 @@ class Project:
         self,
         git_branch: str,
         workspace_name: str,
-        use_git_clone: bool = False
+        use_git_clone: bool = False,
+        local: bool = False,
     ) -> Path:
         """Add a new workspace with config mapping.
 
         Args:
-            git_branch: Git branch name (can contain slashes)
+            git_branch: Git branch name (can contain slashes). Ignored when local=True.
             workspace_name: Workspace name to create (filesystem safe)
-            use_git_clone: If True, use full git clone; if False, copy primary workspace
+            use_git_clone: If True, use full git clone; if False, copy primary workspace.
+                           Ignored when local=True (always copies).
+            local: If True, create a local workspace not tied to any remote branch.
+                   Copied from the primary workspace as-is, no branch switching.
 
         Returns:
             Path to new workspace directory
@@ -376,8 +386,8 @@ class Project:
             ValueError: If workspace already exists or invalid names
             RuntimeError: If fetch from remote fails
         """
-        # Validate both names
-        self._validate_branch_name(git_branch)
+        if not local:
+            self._validate_branch_name(git_branch)
         self._validate_workspace_name(workspace_name)
 
         workspace_dir = self.path / workspace_name
@@ -404,60 +414,64 @@ class Project:
                 f"Workspace '{workspace_name}' already exists in config"
             )
 
-        # Get remote URL and primary branch
-        remote_url = self._get_remote_url()
         primary_branch = self.get_primary_branch()
-        primary_path = self.path / primary_branch
+        primary_path = self.path / primary_branch / self.path.name
 
-        # Fetch to get latest remote branches
-        try:
-            subprocess.run(
-                ["git", "-C", str(primary_path), "fetch", "origin"],
+        workspace_dir.mkdir()
+        inner_path = workspace_dir / self.path.name
+
+        if local:
+            # Local workspace: copy primary as-is, no remote interaction
+            shutil.copytree(primary_path, inner_path, symlinks=True)
+        else:
+            # Fetch to get latest remote branches
+            try:
+                subprocess.run(
+                    ["git", "-C", str(primary_path), "fetch", "origin"],
+                    capture_output=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError:
+                raise RuntimeError("Failed to fetch from remote")
+
+            # Check if branch exists remotely
+            result = subprocess.run(
+                ["git", "-C", str(primary_path), "ls-remote", "origin", f"refs/heads/{git_branch}"],
                 capture_output=True,
-                check=True,
+                text=True,
             )
-        except subprocess.CalledProcessError:
-            raise RuntimeError("Failed to fetch from remote")
+            branch_exists_on_remote = bool(result.stdout.strip())
 
-        # Check if branch exists remotely
-        result = subprocess.run(
-            ["git", "-C", str(primary_path), "ls-remote", "origin", f"refs/heads/{git_branch}"],
-            capture_output=True,
-            text=True,
-        )
-        branch_exists_on_remote = bool(result.stdout.strip())
+            if use_git_clone:
+                remote_url = self._get_remote_url()
+                subprocess.run(
+                    ["git", "clone", remote_url, str(inner_path)],
+                    check=True,
+                )
+            else:
+                shutil.copytree(primary_path, inner_path, symlinks=True)
 
-        # Clone the repository
-        if use_git_clone:
-            # Full git clone from remote
-            subprocess.run(
-                ["git", "clone", remote_url, str(workspace_dir)],
-                check=True,
-            )
-        else:
-            # Copy the primary workspace directory (includes .git with all state)
-            shutil.copytree(primary_path, workspace_dir, symlinks=True)
-
-        # Switch to the branch
-        if branch_exists_on_remote:
-            subprocess.run(
-                ["git", "-C", str(workspace_dir), "switch", git_branch],
-                check=True,
-            )
-        else:
-            subprocess.run(
-                ["git", "-C", str(workspace_dir), "switch", "-c", git_branch],
-                check=True,
-            )
+            # Switch to the branch
+            if branch_exists_on_remote:
+                subprocess.run(
+                    ["git", "-C", str(inner_path), "switch", git_branch],
+                    check=True,
+                )
+            else:
+                subprocess.run(
+                    ["git", "-C", str(inner_path), "switch", "-c", git_branch],
+                    check=True,
+                )
 
         # Update config with new mapping
         mappings[workspace_name] = WorkspaceMetadata(
             git_branch=git_branch,
-            created_at=datetime.now().isoformat()
+            created_at=datetime.now().isoformat(),
+            local=local,
         )
         self._save_config(mappings)
 
-        return workspace_dir
+        return inner_path
 
     def add_branch_directory(self, branch_name: str, use_git_clone: bool = False) -> Path:
         """Deprecated: Use add_workspace() instead.
@@ -536,6 +550,53 @@ class Project:
 
         return True
 
+    def get_stale_workspaces(self) -> list[tuple[str, str]]:
+        """Return workspaces whose remote branches no longer exist.
+
+        Fetches from remote with --prune, then checks each non-local workspace.
+
+        Returns:
+            List of (workspace_name, git_branch) tuples for stale workspaces
+
+        Raises:
+            RuntimeError: If no primary branch found or fetch fails
+        """
+        mappings = self._load_config()
+        primary_branch = self.get_primary_branch()
+        primary_path = self.path / primary_branch / self.path.name
+
+        # Fetch and prune stale remote-tracking branches
+        try:
+            subprocess.run(
+                ["git", "-C", str(primary_path), "fetch", "origin", "--prune"],
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            raise RuntimeError("Failed to fetch from remote")
+
+        # Get all current remote branch names at once
+        result = subprocess.run(
+            ["git", "-C", str(primary_path), "ls-remote", "--heads", "origin"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        remote_branches: set[str] = set()
+        for line in result.stdout.splitlines():
+            if '\t' in line:
+                ref = line.split('\t')[1]
+                remote_branches.add(ref.removeprefix('refs/heads/'))
+
+        stale = []
+        for ws_name, meta in mappings.items():
+            if meta.local:
+                continue
+            if meta.git_branch not in remote_branches:
+                stale.append((ws_name, meta.git_branch))
+
+        return stale
+
     def list_branches(self) -> list[str]:
         """List all available branches from remote.
 
@@ -547,7 +608,7 @@ class Project:
 
         try:
             primary_branch = self.get_primary_branch()
-            primary_path = self.path / primary_branch
+            primary_path = self.path / primary_branch / self.path.name
 
             result = subprocess.run(
                 ["git", "-C", str(primary_path), "branch", "-r"],

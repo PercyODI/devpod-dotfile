@@ -119,10 +119,11 @@ class RepositoryService:
         # Create parent directory
         project_dir.mkdir(parents=True, exist_ok=True)
 
-        # Clone into subdirectory named after default branch
+        # Create outer workspace dir, then clone into inner repo dir named after project
         branch_dir = project_dir / default_branch
+        branch_dir.mkdir()
         subprocess.run(
-            ["git", "clone", url, str(branch_dir)],
+            ["git", "clone", url, str(branch_dir / name)],
             check=True,
         )
 
@@ -155,16 +156,19 @@ class RepositoryService:
         start_container: bool = True,
         use_external_dotfiles: bool = False,
         use_git_clone: bool = False,
+        local: bool = False,
     ) -> BranchAddResult:
         """Create workspace and optionally start its container.
 
         Args:
             project: Project instance
-            git_branch: Git branch name (can contain slashes)
+            git_branch: Git branch name (can contain slashes). Ignored when local=True.
             workspace_name: Workspace name to create (filesystem safe)
             start_container: Whether to start devcontainer
             use_external_dotfiles: Whether to use external dotfiles
-            use_git_clone: If True, use full git clone; if False, copy primary workspace
+            use_git_clone: If True, use full git clone; if False, copy primary workspace.
+                           Ignored when local=True.
+            local: If True, create a local workspace not tied to any remote branch.
 
         Returns:
             BranchAddResult with path and branch info
@@ -178,12 +182,13 @@ class RepositoryService:
         workspace_path = project.add_workspace(
             git_branch=git_branch,
             workspace_name=workspace_name,
-            use_git_clone=use_git_clone
+            use_git_clone=use_git_clone,
+            local=local,
         )
 
         # Start container if requested
         if start_container:
-            self.devcontainer_service.up(workspace_path, use_external_dotfiles)
+            self.devcontainer_service.up(workspace_path, project.path, use_external_dotfiles)
 
         return BranchAddResult(
             branch_path=workspace_path,

@@ -10,7 +10,7 @@ A Python tool for managing devcontainers with git branch directories.
 - **Testable**: Structured for easy unit testing
 - **Extensible**: Easy to add new features or container images
 - **Interactive Selection**: fzf integration with fallback to simple selection
-- **Configuration**: YAML config file support
+- **Configuration**: Environment variable-based configuration
 - **Simple Mental Model**: Each branch = a directory
 
 ## Installation
@@ -119,29 +119,32 @@ dv template feature-123 python
 
 ## Configuration
 
-Create `~/.config/dv/config.yml`:
+`dv` reads all configuration from environment variables. No config file is used.
 
-```yaml
-# API Keys (optional, can use environment variables)
-anthropic_api_key: sk-...
-openai_api_key: sk-...
+| Variable            | Default                                       | Description                              |
+|---------------------|-----------------------------------------------|------------------------------------------|
+| `ANTHROPIC_API_KEY` | (none)                                        | Anthropic API key for Claude Code        |
+| `OPENAI_API_KEY`    | (none)                                        | OpenAI API key                           |
+| `PREFER_OPENCODE`   | `false`                                       | Use Opencode instead of Claude Code      |
+| `GIT_USER_NAME`     | (none)                                        | Git author/committer name                |
+| `GIT_USER_EMAIL`    | (none)                                        | Git author/committer email               |
+| `DOTFILES_DIR`      | `~/github/devpod-dotfile`                     | Path to local dotfiles on the host       |
+| `DOTFILES_REPO`     | `https://github.com/PercyODI/devpod-dotfile`  | URL for external dotfiles repo           |
 
-# Git config
-git_user_name: "Your Name"
-git_user_email: "you@example.com"
+### Built-in Container Images
 
-# Dotfiles
-dotfiles_dir: ~/github/devpod-dotfile
-dotfiles_repo: https://github.com/PercyODI/devpod-dotfile
+The `dv template` command accepts these image aliases:
 
-# Custom container images
-images:
-  node: mcr.microsoft.com/devcontainers/typescript-node:24-trixie
-  python: mcr.microsoft.com/devcontainers/python:1-3.12-bookworm
-  custom: your-custom-image:latest
-```
+| Alias       | Image URI                                                       |
+|-------------|-----------------------------------------------------------------|
+| `node22`    | `mcr.microsoft.com/devcontainers/typescript-node:22-bookworm`  |
+| `node`      | `mcr.microsoft.com/devcontainers/typescript-node:24-trixie`    |
+| `python`    | `mcr.microsoft.com/devcontainers/python:1-3.12-bookworm`       |
+| `java`      | `mcr.microsoft.com/devcontainers/java:1-21-bookworm`           |
+| `universal` | `mcr.microsoft.com/devcontainers/universal:2-linux`            |
+| `base`      | `mcr.microsoft.com/devcontainers/base:1-bookworm`              |
 
-Environment variables still work and take precedence over the config file.
+To use a custom image, specify the full URI directly in `.devcontainer/devcontainer.json`.
 
 ## Key Design Decisions
 
@@ -247,7 +250,7 @@ black dv/
 1. **Better abstractions** - Classes, dataclasses, enums
 2. **Type safety** - Catch bugs before runtime
 3. **Testing** - pytest, mocking, coverage
-4. **Libraries** - Click, Rich, PyYAML
+4. **Libraries** - Click, Rich
 5. **Maintainability** - Easier for teams to understand
 6. **Extensibility** - Plugins, custom commands
 

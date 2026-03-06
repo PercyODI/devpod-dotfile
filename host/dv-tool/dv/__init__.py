@@ -1,3 +1,5 @@
 """dv - Devcontainer management tool for git branch directories."""
 
-__version__ = "2.0.0"
+from importlib.metadata import version
+
+__version__ = version("dv")
